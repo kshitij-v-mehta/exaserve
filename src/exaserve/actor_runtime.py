@@ -18,6 +18,7 @@ from .compat.profile import (
     PP_PATCH_GATE,
     RAY_WORKER_PATCH_GATE,
 )
+from .state.process_ownership import generation_runtime_root
 
 
 _INHERITED_ACTOR_ENV = (
@@ -65,6 +66,7 @@ _PROTECTED_ACTOR_ENV = frozenset(
         "EXASERVE_ALLOCATION_BINDING_PATH",
         "EXASERVE_COMPAT_ROLE",
         "EXASERVE_RECEIPT_RANK",
+        "TRITON_CACHE_DIR",
         SOCKET_ENV,
     }
 )
@@ -74,6 +76,7 @@ def build_actor_runtime_env(
     extra_env_vars: Optional[dict[str, str]] = None,
     *,
     receipt_owner_rank: Optional[int] = None,
+    replica_index: Optional[int] = None,
 ) -> dict[str, dict[str, str]]:
     """Project canonical identity and Aurora settings into one Serve actor.
 
@@ -124,5 +127,26 @@ def build_actor_runtime_env(
             generation,
             owner_rank=receipt_owner_rank,
         )
+
+        if replica_index is not None:
+            if (
+                isinstance(replica_index, bool)
+                or not isinstance(replica_index, int)
+                or replica_index < 0
+            ):
+                raise ValueError("replica_index must be a non-negative integer or null")
+            # Triton does not safely support concurrent writers sharing one
+            # cache.  A node can host many Serve replicas that compile the
+            # same kernels simultaneously, so bind each logical replica to a
+            # distinct cache below the already-owned, generation-scoped
+            # node-local runtime tree.  Spawned vLLM EngineCore processes
+            # inherit this value before importing Triton.
+            env_vars["TRITON_CACHE_DIR"] = os.path.join(
+                generation_runtime_root(deployment_id, generation, receipt_owner_rank),
+                "triton",
+                f"replica-{replica_index}",
+            )
+    elif replica_index is not None:
+        raise ValueError("replica_index requires receipt_owner_rank")
 
     return {"env_vars": env_vars}

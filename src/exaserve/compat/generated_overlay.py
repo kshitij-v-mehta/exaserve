@@ -238,7 +238,10 @@ def load_manifest(profile: CompatibilityProfile, root: str | os.PathLike) -> dic
     if _sha256(bootstrap_source) != manifest["bootstrap_source_hash"]:
         raise GeneratedOverlayError("overlay bootstrap source hash mismatch")
     entries = manifest["entries"]
-    if not isinstance(entries, list) or not entries:
+    # A patch-free profile (the current Frontier/ROCm validation profile) has
+    # a valid empty overlay.  Non-empty profiles are still proven below by the
+    # exact expected/observed patch-id equality check.
+    if not isinstance(entries, list):
         raise GeneratedOverlayError("overlay manifest entries are invalid")
     expected_groups: dict[str, dict] = {}
     for patch in _selected(profile):

@@ -33,6 +33,7 @@ from .plan.contracts import (
 )
 
 AURORA_SITE_ID = "alcf-aurora"
+FRONTIER_SITE_ID = "olcf-frontier"
 
 
 def local_account_name() -> str:
@@ -100,6 +101,95 @@ _AURORA_PREPARED_ENVIRONMENT = (
     ("RAY_EXPERIMENTAL_NOSET_ONEAPI_DEVICE_SELECTOR", "1"),
 )
 
+_FRONTIER_PREPARED_ENVIRONMENT = (
+    ("EXASERVE_RAY_INTERNAL_STARTUP_LIMIT", "8"),
+    ("MKL_NUM_THREADS", "1"),
+    ("NUMEXPR_NUM_THREADS", "1"),
+    ("OMP_NUM_THREADS", "1"),
+    ("OPENBLAS_NUM_THREADS", "1"),
+    ("PYTHONUNBUFFERED", "1"),
+    ("RAYON_NUM_THREADS", "1"),
+    ("RAY_SERVE_MAX_DEPLOYMENT_CONSTRUCTOR_RETRY_COUNT", "200"),
+    ("RAY_SERVE_QUEUE_LENGTH_RESPONSE_DEADLINE_S", "300.0"),
+    ("RAY_core_worker_num_server_call_thread", "1"),
+    ("RAY_enable_metrics_collection", "0"),
+    ("RAY_gcs_rpc_server_connect_timeout_s", "30"),
+    ("RAY_gcs_rpc_server_reconnect_timeout_s", "120"),
+    ("RAY_gcs_server_num_threads", "8"),
+    ("RAY_gcs_server_request_timeout_seconds", "60"),
+    ("RAY_num_grpc_internal_threads", "1"),
+    ("RAY_num_server_call_thread", "4"),
+    ("RAY_raylet_start_wait_time_s", "120"),
+    ("RAY_raylet_client_connect_timeout_milliseconds", "30000"),
+    ("RAY_raylet_client_num_connect_attempts", "20"),
+    ("RAY_task_events_report_interval_ms", "0"),
+    ("RAY_worker_num_grpc_internal_threads", "1"),
+    ("RAY_worker_register_timeout_seconds", "120"),
+    ("TOKENIZERS_PARALLELISM", "false"),
+)
+
+
+def _frontier_model_storage_path() -> str:
+    explicit = os.environ.get("EXASERVE_MODEL_STORAGE_PATH", "").strip()
+    if explicit:
+        return explicit
+    project_root = os.environ.get("EXASERVE_PROJECT_ROOT", "").strip()
+    if not project_root:
+        project_root = os.environ.get("MEMBERWORK", "").strip()
+    if not project_root or not Path(project_root).is_absolute():
+        raise RuntimeError(
+            "Frontier requires EXASERVE_MODEL_STORAGE_PATH or an absolute "
+            "EXASERVE_PROJECT_ROOT/MEMBERWORK path"
+        )
+    return str(Path(project_root) / "models")
+
+
+def _frontier_site_profile(site_id: str) -> SiteProfile:
+    """Unqualified Frontier profile for deliberate validation deployments."""
+    from .compat.profile import default_profile
+
+    profile = default_profile("rocm")
+    account = local_account_name()
+    return SiteProfile(
+        schema_version=SCHEMA_VERSION,
+        site_id=site_id,
+        max_nodes=int(os.environ.get("EXASERVE_SITE_MAX_NODES", "256")),
+        gpus_per_node=int(os.environ.get("EXASERVE_SITE_GPUS_PER_NODE", "8")),
+        cpus_per_node=int(os.environ.get("EXASERVE_SITE_CPUS_PER_NODE", "56")),
+        scheduler_types=("slurm",),
+        gateway_kinds=("haproxy",),
+        vendors=("rocm",),
+        engines=("vllm",),
+        model_storage_path=_frontier_model_storage_path(),
+        local_stage_path=os.environ.get(
+            "EXASERVE_LOCAL_STAGE_PATH", f"/mnt/bb/{account}/exaserve"
+        ),
+        control=ControlLimits(),
+        # Frontier uses upstream, patch-free Ray 2.53.  Its native
+        # HTTP_PROXY_TIMEOUT is 60 seconds; Aurora's 3600-second value is
+        # delivered by an XPU compatibility patch and must not leak here.
+        readiness=ReadinessLimits(serve_start_proxy_timeout_s=60.0),
+        launcher_capabilities=("srun", "cray-mpich", "ray_serve.run_many"),
+        filesystem_semantics=(("shared", "orion-lustre"), ("local_stage", "node_nvme")),
+        accelerator_inventory=("mi250x-gcd",),
+        network_boundary="trusted_allocation",
+        environment_profile_ref=profile.profile_id,
+        prepared_environment=_FRONTIER_PREPARED_ENVIRONMENT,
+        environment_unset=(
+            "CUDA_VISIBLE_DEVICES",
+            "HIP_VISIBLE_DEVICES",
+            "ROCR_VISIBLE_DEVICES",
+            "ONEAPI_DEVICE_SELECTOR",
+            "ZE_AFFINITY_MASK",
+            "ZE_FLAT_DEVICE_HIERARCHY",
+        ),
+        stack_size_kb=8192,
+        # No production envelope is claimed before real Frontier evidence.
+        # compile_deployment_plan creates a generic envelope only when the
+        # deployment explicitly sets validation_mode: true.
+        scale_envelopes=(),
+    ).finalize()
+
 
 @lru_cache(maxsize=4)
 def default_site_profile(site_id: str = "") -> SiteProfile:
@@ -109,6 +199,8 @@ def default_site_profile(site_id: str = "") -> SiteProfile:
     fixed here where they are properties of the machine.
     """
     site_id = site_id or os.environ.get("EXASERVE_SITE_ID", AURORA_SITE_ID)
+    if site_id in {"frontier", FRONTIER_SITE_ID}:
+        return _frontier_site_profile(FRONTIER_SITE_ID)
     from .compat.profile import default_profile
 
     max_nodes = int(os.environ.get("EXASERVE_SITE_MAX_NODES", "64"))

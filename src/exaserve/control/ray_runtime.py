@@ -105,9 +105,13 @@ def _startup_limit(cluster: RayClusterConfig) -> int:
     return min(cluster.node_cpus, limit)
 
 
-def _local_hsn_ip() -> str:
+def _local_node_ip() -> str:
     hostname = socket.gethostname()
-    for candidate in (f"{hostname}.hsn.cm.aurora.alcf.anl.gov", hostname):
+    site_id = os.environ.get("EXASERVE_SITE_ID", "")
+    candidates = [hostname]
+    if site_id in {"", "alcf-aurora"}:
+        candidates.insert(0, f"{hostname}.hsn.cm.aurora.alcf.anl.gov")
+    for candidate in candidates:
         try:
             return socket.gethostbyname(candidate)
         except OSError:
@@ -119,7 +123,7 @@ def ray_node_ip(cluster: RayClusterConfig, rank: int) -> str:
     """Resolve the one address shared by a rank's Ray and vLLM children."""
     if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
         raise ValueError(f"Ray rank must be a non-negative integer, got {rank!r}")
-    return cluster.head_ip if rank == 0 else _local_hsn_ip()
+    return cluster.head_ip if rank == 0 else _local_node_ip()
 
 
 def ray_head_argv(cluster: RayClusterConfig, num_gpus: int) -> list[str]:

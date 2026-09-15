@@ -325,8 +325,22 @@ def run(config_path: str) -> int:
     # Compatibility activation happens BEFORE any Ray/engine import.
     try:
         from .compat.activator import CompatibilityActivator
+        from .compat.profile import default_profile
+
+        # The immutable plan, not an ambient environment default, selects the
+        # accelerator compatibility family.  CompatibilityActivator defaults
+        # to XPU for Aurora when no vendor is supplied, which would otherwise
+        # make a valid Frontier/ROCm plan activate the Aurora profile.
+        compatibility_profile = default_profile(plan.vendor)
+        if compatibility_profile.profile_id != plan.compatibility_profile_hash:
+            raise ValueError(
+                "runtime compatibility profile does not match DeploymentPlan: "
+                f"profile={compatibility_profile.profile_id}, "
+                f"plan={plan.compatibility_profile_hash}"
+            )
 
         activator = CompatibilityActivator(
+            profile=compatibility_profile,
             deployment_id=plan.deployment_id,
             generation=generation,
         )

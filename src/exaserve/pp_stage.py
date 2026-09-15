@@ -62,7 +62,7 @@ def subset_launch_prefix(hosts: list[str], scheduler: str) -> list[str]:
             f"--ntasks={len(hosts)}",
             "--ntasks-per-node=1",
             f"--nodelist={','.join(hosts)}",
-            "--cpu-bind=none",
+            "--cpus-per-task=7",
         ]
     return [
         "mpiexec",
@@ -85,7 +85,11 @@ def _run(argv: list[str], *, timeout_s: float) -> subprocess.CompletedProcess[st
     from .control.finite_process import FiniteProcessError, run_finite
 
     try:
-        result = run_finite(argv, timeout_s=timeout_s)
+        result = run_finite(
+            argv,
+            timeout_s=timeout_s,
+            descendant_exit_grace_s=5.0 if Path(argv[0]).name == "srun" else 0.0,
+        )
     except (OSError, FiniteProcessError) as exc:
         raise RuntimeError(f"PP staging command failed: {exc}") from exc
     if result.stdout:

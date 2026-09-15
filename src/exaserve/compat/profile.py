@@ -10,6 +10,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+import os
+import platform
 import re
 from dataclasses import asdict, dataclass
 from importlib import metadata
@@ -355,6 +357,29 @@ def default_profile(vendor: str = "xpu") -> CompatibilityProfile:
 
     Patch ids mirror ``doc/hardening/COMPATIBILITY_INVENTORY.md``.
     """
+    if vendor == "rocm":
+        # Frontier uses the upstream ROCm build of vLLM rather than Aurora's
+        # XPU fork.  In particular, it must never inherit the XPU source hashes
+        # or XPU-only compatibility patches below.  This candidate profile is
+        # deliberately patch-free until Frontier qualification produces exact
+        # source/patch evidence of its own.
+        python_version = os.environ.get(
+            "EXASERVE_FRONTIER_PYTHON_VERSION", platform.python_version()
+        )
+        ray_version = os.environ.get("EXASERVE_FRONTIER_RAY_VERSION", "2.53.0")
+        vllm_version = os.environ.get("EXASERVE_FRONTIER_VLLM_VERSION", "0.14.1")
+        profile = CompatibilityProfile(
+            schema_version=SCHEMA_VERSION,
+            name=f"frontier-rocm-ray-{ray_version}-vllm-{vllm_version}",
+            python=python_version,
+            ray=ray_version,
+            vllm=vllm_version,
+            vendor="rocm",
+            patches=(),
+        )
+        object.__setattr__(profile, "profile_id", profile.compute_id())
+        return profile
+
     package_dir = Path(__file__).resolve().parents[1]
 
     def _hash_file(path: Path) -> str:

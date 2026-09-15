@@ -8,7 +8,7 @@ from types import SimpleNamespace
 
 import pytest
 
-from exaserve.model_bcast import bcast_models, validate_model_bcast_result
+from exaserve.model_bcast import bcast_models, mpi_launch_prefix, validate_model_bcast_result
 from exaserve.model_staging import COMPLETION_MARKER, check_model_exists, write_completion_marker
 from exaserve.pp_stage import (
     _validate_pp_receipt,
@@ -99,6 +99,16 @@ def test_pp_node_assignment_is_exact_replica_major_order():
     ]
     assert stage_node_groups(nodes, 2, 2) == {0: ["n2", "n3"], 1: ["n0", "n1"]}
     assert subset_launch_prefix(["n2", "n3"], "pbs")[-1] == "n2,n3"
+
+
+def test_frontier_staging_ranks_receive_one_l3_region():
+    full = mpi_launch_prefix(8, scheduler="slurm")
+    subset = subset_launch_prefix(["n2", "n3"], "slurm")
+    for prefix in (full, subset):
+        assert "--cpus-per-task=7" in prefix
+        assert "--cpu-bind=none" not in prefix
+        assert not any(item.startswith("--cpu-bind") for item in prefix)
+        assert not any(item.startswith("--threads-per-core") for item in prefix)
 
 
 def test_pp_receipt_rejects_coercible_node_identity():

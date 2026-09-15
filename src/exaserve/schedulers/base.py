@@ -52,6 +52,7 @@ class JobSpec:
     stderr_dir: Path
     command_argv: tuple[str, ...]
     queue: str = ""
+    qos: Optional[str] = None
     cwd: Optional[Path] = None
     environment: Mapping[str, str] = field(default_factory=dict)
     bootstrap_script: str = ""
@@ -59,6 +60,8 @@ class JobSpec:
     pythonpath: tuple[Path, ...] = ()
     filesystems: Optional[str] = None
     keep_flag: Optional[str] = None
+    constraint: Optional[str] = None
+    network: Optional[str] = None
     gpus_per_node: Optional[int] = None
     mail_user: str = ""
     mail_events: str = ""
@@ -89,8 +92,11 @@ class JobSpec:
             "account",
             "job_name",
             "queue",
+            "qos",
             "filesystems",
             "keep_flag",
+            "constraint",
+            "network",
             "mail_user",
             "mail_events",
             "run_identity",
@@ -254,16 +260,23 @@ def run_submission_cmd(cmd: Sequence[str], timeout_s: int) -> subprocess.Complet
         raise SubmissionAmbiguous(str(exc)) from exc
 
 
-def default_queue_and_walltime(num_nodes: int) -> tuple[str, str]:
-    """Conservative Aurora defaults for a topology without explicit values.
+def default_queue_and_walltime(
+    num_nodes: int, *, scheduler: str = "pbs"
+) -> tuple[str, str]:
+    """Conservative site-family defaults for a topology without explicit values.
 
-    The site's capacity queue covers 1--16 nodes (and permits longer jobs),
+    Frontier Slurm uses the batch partition. Aurora's capacity queue covers
+    1--16 nodes (and permits longer jobs),
     while debug-scaling covers 2--256 nodes with a one-hour maximum.  Production
     starts at 256 nodes.  At the overlapping 256-node boundary we choose prod
     so a default is not silently constrained to a debug reservation.
     """
     if isinstance(num_nodes, bool) or not isinstance(num_nodes, int) or num_nodes <= 0:
         raise ValueError("num_nodes must be a positive integer")
+    if scheduler == "slurm":
+        return "batch", "01:00:00"
+    if scheduler != "pbs":
+        raise ValueError(f"unsupported scheduler default policy {scheduler!r}")
     if num_nodes <= 16:
         return "capacity", "01:00:00"
     if num_nodes < 256:

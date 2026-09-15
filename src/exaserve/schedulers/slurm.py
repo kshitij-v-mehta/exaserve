@@ -54,7 +54,11 @@ class SlurmScheduler(SchedulerBackend):
 
     def render_job(self, spec: JobSpec) -> str:
         part = f"#SBATCH --partition={spec.queue}\n" if spec.queue else ""
+        qos = f"#SBATCH --qos={spec.qos}\n" if spec.qos else ""
         gpn = f"#SBATCH --gpus-per-node={spec.gpus_per_node}\n" if spec.gpus_per_node else ""
+        constraint = f"#SBATCH --constraint={spec.constraint}\n" if spec.constraint else ""
+        network = f"#SBATCH --network={spec.network}\n" if spec.network else ""
+        exclusive = "#SBATCH --exclusive\n" if spec.exclusive else ""
         mail = (
             f"#SBATCH --mail-user={spec.mail_user}\n"
             f"#SBATCH --mail-type={_map_mail(spec.mail_events)}\n"
@@ -65,8 +69,8 @@ class SlurmScheduler(SchedulerBackend):
         header = (
             "#!/bin/bash -l\n"
             f"{identity}#SBATCH --job-name={spec.job_name}\n"
-            f"#SBATCH --account={spec.account}\n{part}"
-            f"#SBATCH --nodes={spec.num_nodes}\n"
+            f"#SBATCH --account={spec.account}\n{part}{qos}"
+            f"#SBATCH --nodes={spec.num_nodes}\n{constraint}{network}{exclusive}"
             "#SBATCH --ntasks-per-node=1\n"
             f"{gpn}#SBATCH --time={spec.walltime}\n"
             f"#SBATCH --output={spec.stdout_dir}/%x-%j.out\n"
@@ -145,10 +149,44 @@ class SlurmScheduler(SchedulerBackend):
         *,
         user: Optional[str] = None,
     ) -> tuple[JobObservation, ...]:
-        raise NotImplementedError(
-            "Slurm exact reconciliation is not qualified: active-only squeue "
-            "search can miss an accepted job that already entered accounting"
+        import getpass
+
+        owner = user or getpass.getuser()
+        records: dict[str, JobObservation] = {}
+        active = run_cmd(
+            ["squeue", "-h", "-u", owner, "-o", "%i|%T|%j|%N|%R"],
+            self.status_timeout_s,
+            check=False,
         )
+        if active.returncode == 0:
+            for line in active.stdout.splitlines():
+                parts = line.strip().split("|")
+                if len(parts) >= 5 and parts[2] == run_identity:
+                    records[parts[0]] = self.observe(parts[0])
+        historical = run_cmd(
+            [
+                "sacct",
+                "-n",
+                "-X",
+                "-P",
+                "-u",
+                owner,
+                "--name",
+                run_identity,
+                "--format=JobIDRaw,State,JobName,NodeList,Reason",
+            ],
+            self.status_timeout_s,
+            check=False,
+        )
+        if historical.returncode != 0:
+            raise RuntimeError(
+                historical.stderr.strip() or "cannot reconcile Slurm submissions through sacct"
+            )
+        for line in historical.stdout.splitlines():
+            parts = line.strip().split("|")
+            if len(parts) >= 5 and parts[0] and parts[2] == run_identity:
+                records.setdefault(parts[0], self.observe(parts[0]))
+        return tuple(records[job_id] for job_id in sorted(records))
 
     def count_queued(self, user: str) -> Optional[dict[str, int]]:
         raw = self._squeue("-u", user, "-o", "%P|%t")

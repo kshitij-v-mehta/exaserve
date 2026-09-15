@@ -54,6 +54,7 @@ def runtime_environment(plan) -> dict[str, str]:
         "EXASERVE_RAY_SERVE_START_PROXY_TIMEOUT_S": str(plan.readiness.serve_start_proxy_timeout_s),
         "EXASERVE_ENGINE": plan.engine,
         "EXASERVE_VENDOR": plan.vendor,
+        "EXASERVE_SITE_ID": plan.site_profile_id,
         "EXASERVE_COMPAT_PROFILE_ID": plan.compatibility_profile_hash,
         "EXASERVE_COMPAT_MANIFEST_HASH": plan.manifest_hash,
         ROOT_ENV: overlay_root_for(plan.compatibility_profile_hash),

@@ -1,0 +1,51 @@
+# Copy this file outside the checkout, edit the values, then source it.
+# Do not put credentials or Hugging Face tokens in this file.
+
+export PROJECT_ID="PROJECT"
+export EXASERVE_SOURCE_DIR="/lustre/orion/PROJECT/scratch/USER/src/exaserve"
+export EXASERVE_STACK_ROOT="/lustre/orion/PROJECT/scratch/USER/exaserve-stack"
+export WORK_ROOT="/lustre/orion/PROJECT/scratch/USER/exaserve-work"
+export EXASERVE_MODEL_STORAGE_PATH="${WORK_ROOT}/models"
+export EXASERVE_LOCAL_STAGE_PATH="/mnt/bb/USER/exaserve"
+
+export EXASERVE_FRONTIER_VENV="${EXASERVE_STACK_ROOT}/env-py312-rocm71-vllm015"
+export EXASERVE_PYTHON_RUNTIME_ARCHIVE="${EXASERVE_STACK_ROOT}/runtime/env-py312-rocm71-vllm015-site-packages.tar"
+export EXASERVE_DOWNLOAD_ROOT="${EXASERVE_STACK_ROOT}/downloads-cp312"
+export EXASERVE_WHEELHOUSE="${EXASERVE_DOWNLOAD_ROOT}/wheelhouse"
+export VLLM_SOURCE_DIR="${EXASERVE_STACK_ROOT}/src/vllm-0.15.0"
+export TRITON_KERNELS_TAG="v3.5.0"
+export TRITON_KERNELS_REPO_DIR="${EXASERVE_STACK_ROOT}/src/triton-${TRITON_KERNELS_TAG}"
+export TRITON_KERNELS_SRC_DIR="${TRITON_KERNELS_REPO_DIR}/python/triton_kernels/triton_kernels"
+export VLLM_BUILD_LOG_DIR="${EXASERVE_STACK_ROOT}/logs"
+
+export EXASERVE_FRONTIER_PRGENV_VERSION="8.7.0"
+export EXASERVE_FRONTIER_CPE_VERSION="26.03"
+export EXASERVE_FRONTIER_MINIFORGE_VERSION="23.11.0-0"
+export EXASERVE_FRONTIER_ROCM_VERSION="7.1.1"
+
+export PYTHON_VERSION="3.12"
+export TORCH_VERSION="2.10.0"
+export TORCHVISION_VERSION="0.25.0"
+export TORCHAUDIO_VERSION="2.10.0"
+export TORCH_ROCM_INDEX="https://download.pytorch.org/whl/rocm7.1"
+export EXPECTED_TORCH_VERSION="2.10.0+rocm7.1"
+export EXPECTED_TORCH_ROCM_ABI="7.1"
+export RAY_VERSION="2.53.0"
+export EXPECTED_FASTAPI_VERSION="0.136.0"
+export VLLM_VERSION="0.15.0"
+# Update this after the source build and retain the exact local version suffix.
+export EXPECTED_VLLM_VERSION="0.15.1.dev0+gf17644344.d20260828.rocm711"
+
+# SHA-256 published beside the HAProxy 3.1.6 source archive by haproxy.org.
+export HAPROXY_VERSION="3.1.6"
+export HAPROXY_SOURCE_SHA256="21852e4a374bb8d9b3dda5dc834afe6557f422d7029f4fe3eac3c305f5124760"
+export HAPROXY_BUILD_JOBS="4"
+export HAPROXY_SOURCE_TARBALL="${EXASERVE_DOWNLOAD_ROOT}/haproxy-${HAPROXY_VERSION}.tar.gz"
+
+export SMOLLM2_MODEL_ID="HuggingFaceTB/SmolLM2-360M-Instruct"
+export SMOLLM2_MODEL_REVISION="a10cc1512eabd3dde888204e902eca88bddb4951"
+export SMOLLM2_MODEL_PATH="${EXASERVE_MODEL_STORAGE_PATH}/HuggingFaceTB--SmolLM2-360M-Instruct"
+
+export PYTORCH_ROCM_ARCH="gfx90a"
+export VLLM_TARGET_DEVICE="rocm"
+export MAX_JOBS="16"

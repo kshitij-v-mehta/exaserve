@@ -50,6 +50,15 @@ def _group_exists(pgid: int) -> bool:
         return True
 
 
+def _wait_group_exit(pgid: int, *, deadline: float) -> bool:
+    """Wait boundedly for a successfully exiting leader's group to drain."""
+    while time.monotonic() < deadline:
+        if not _group_exists(pgid):
+            return True
+        time.sleep(min(0.02, max(0.0, deadline - time.monotonic())))
+    return not _group_exists(pgid)
+
+
 def _stop_group(pgid: int, *, deadline: float) -> None:
     if not _group_exists(pgid):
         return
@@ -110,6 +119,7 @@ def run_finite(
     env: Mapping[str, str] | None = None,
     check: bool = False,
     termination_grace_s: float = 5.0,
+    descendant_exit_grace_s: float = 0.0,
     pass_fds: Sequence[int] = (),
     cancel_requested: Callable[[], bool] | None = None,
 ) -> subprocess.CompletedProcess[str]:
@@ -123,14 +133,18 @@ def run_finite(
     """
     if not argv or any(not isinstance(item, str) or "\x00" in item for item in argv):
         raise ValueError("finite process argv must contain non-NUL strings")
-    for name, value in (
-        ("timeout_s", timeout_s),
-        ("termination_grace_s", termination_grace_s),
-    ):
+    for name, value in (("timeout_s", timeout_s), ("termination_grace_s", termination_grace_s)):
         if isinstance(value, bool) or not isinstance(value, (int, float)):
             raise ValueError(f"{name} must be numeric")
         if not math.isfinite(float(value)) or value <= 0:
             raise ValueError("finite process deadlines must be finite and bounded")
+    if (
+        isinstance(descendant_exit_grace_s, bool)
+        or not isinstance(descendant_exit_grace_s, (int, float))
+        or not math.isfinite(float(descendant_exit_grace_s))
+        or descendant_exit_grace_s < 0
+    ):
+        raise ValueError("descendant_exit_grace_s must be finite and non-negative")
     if any(isinstance(fd, bool) or not isinstance(fd, int) or fd < 0 for fd in pass_fds):
         raise ValueError("pass_fds must contain non-negative file descriptors")
     if cancel_requested is not None and not callable(cancel_requested):
@@ -186,6 +200,11 @@ def run_finite(
     # communicate() cannot return while descendants still hold the captured
     # pipes, but a descendant may explicitly close them.  Such a daemon is a
     # contract violation for finite work and is reaped here.
+    if _group_exists(process.pid) and descendant_exit_grace_s > 0:
+        _wait_group_exit(
+            process.pid,
+            deadline=time.monotonic() + float(descendant_exit_grace_s),
+        )
     if _group_exists(process.pid):
         _stop_group(
             process.pid,

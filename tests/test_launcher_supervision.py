@@ -287,6 +287,9 @@ def test_verified_plan_identity_drives_supervisor_compatibility_activation():
 
     run_source = inspect.getsource(launcher.run)
     assert "deployment_id=plan.deployment_id" in run_source
+    assert "default_profile(plan.vendor)" in run_source
+    assert "profile=compatibility_profile" in run_source
+    assert "compatibility_profile.profile_id != plan.compatibility_profile_hash" in run_source
 
     readiness_source = inspect.getsource(launcher._drive_readiness)
     assert "gateway_argv(" not in readiness_source

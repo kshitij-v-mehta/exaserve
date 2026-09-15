@@ -10,6 +10,7 @@ import pytest
 
 from exaserve.control.finite_process import (
     FiniteProcessCancelled,
+    FiniteProcessError,
     FiniteProcessTimeout,
     run_finite,
 )
@@ -50,6 +51,36 @@ def test_run_finite_never_invokes_a_shell(tmp_path):
     )
     assert result.stdout.strip() == payload
     assert not sentinel.exists()
+
+
+def test_successful_leader_may_receive_bounded_descendant_exit_grace():
+    program = (
+        "import subprocess,sys; "
+        "subprocess.Popen([sys.executable,'-c',"
+        "'import os,time; os.close(1); os.close(2); time.sleep(0.15)'])"
+    )
+    result = run_finite(
+        [sys.executable, "-c", program],
+        timeout_s=2,
+        descendant_exit_grace_s=1,
+        check=True,
+    )
+    assert result.returncode == 0
+
+
+def test_descendant_exit_grace_remains_fail_closed():
+    program = (
+        "import subprocess,sys; "
+        "subprocess.Popen([sys.executable,'-c',"
+        "'import os,time; os.close(1); os.close(2); time.sleep(60)'])"
+    )
+    with pytest.raises(FiniteProcessError, match="left descendants"):
+        run_finite(
+            [sys.executable, "-c", program],
+            timeout_s=2,
+            descendant_exit_grace_s=0.05,
+            termination_grace_s=0.2,
+        )
 
 
 def test_cancellation_promptly_reaps_the_complete_process_group(tmp_path):

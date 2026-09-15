@@ -364,6 +364,8 @@ def verify_and_publish(
     expected_bytes: int,
     generation: int,
     stable: Path,
+    *,
+    rank: int | None = None,
 ) -> dict:
     started = time.monotonic()
     observed = tree_manifest(candidate_package)
@@ -379,7 +381,7 @@ def verify_and_publish(
     if not stable.is_symlink() or stable.resolve() != candidate_root.resolve():
         raise SourceStagingError(f"atomic source publication failed at {stable}")
     return {
-        "rank": _rank(),
+        "rank": _rank() if rank is None else rank,
         "node": socket.gethostname(),
         "generation": generation,
         "source_manifest_hash": expected_hash,
@@ -409,7 +411,11 @@ def _run_checked(argv: list[str], *, timeout_s: float):
     from .control.finite_process import FiniteProcessError, run_finite
 
     try:
-        completed = run_finite(argv, timeout_s=timeout_s)
+        completed = run_finite(
+            argv,
+            timeout_s=timeout_s,
+            descendant_exit_grace_s=5.0 if Path(argv[0]).name == "srun" else 0.0,
+        )
     except (OSError, FiniteProcessError) as exc:
         raise SourceStagingError(f"native staging command failed: {exc}") from exc
     if completed.stdout:
@@ -429,12 +435,11 @@ def _run_checked(argv: list[str], *, timeout_s: float):
 def stage(
     plan_path: str, binding_path: str, result_path: str, *, operation_timeout_s: float = 1800.0
 ) -> dict:
-    from .control.rank_launcher import resolve_launch_prefix
-    from .model_bcast import compile_bcast
+    from .model_bcast import compile_bcast, mpi_launch_prefix
     from .plan.io import load_allocation_binding, load_deployment_plan
     from .plan.contracts import same_node
     from .state.atomic import atomic_create_json
-    from .staging_results import create_result_dir, load_rank_results
+    from .staging_results import create_result_dir, load_rank_results, write_rank_result
 
     plan = load_deployment_plan(plan_path)
     binding = load_allocation_binding(binding_path)
@@ -460,37 +465,57 @@ def stage(
             f"{manifest['source_manifest_hash'][:12]}.{attempt}"
         )
         candidate_package = candidate_root / "exaserve"
-        prefix = resolve_launch_prefix(plan.num_nodes, scheduler=plan.scale_envelope.scheduler_type)
-        binary = compile_bcast(run_dir / "bcast_build")
-        _run_checked(
-            [*prefix, str(binary), str(clean_package), str(candidate_root)],
-            timeout_s=operation_timeout_s,
-        )
-        _run_checked(
-            [
-                *prefix,
-                sys.executable,
-                "-m",
-                "exaserve.source_staging",
-                "--verify-and-publish",
-                str(candidate_package),
-                "--expected-hash",
+        if plan.num_nodes == 1:
+            # We are already executing on the only allocated node.  Starting
+            # an srun step adds no distribution value and Slurm may retain a
+            # short-lived helper after srun exits, violating run_finite's
+            # deliberately strict no-descendants contract.
+            candidate_root.mkdir(mode=0o700, parents=True)
+            shutil.copytree(clean_package, candidate_package, symlinks=False)
+            receipt = verify_and_publish(
+                candidate_package,
                 manifest["source_manifest_hash"],
-                "--expected-files",
-                str(manifest["file_count"]),
-                "--expected-bytes",
-                str(manifest["total_bytes"]),
-                "--generation",
-                str(binding.generation),
-                "--stable-path",
-                "/tmp/exaserve_src",
-                "--result-dir",
-                str(rank_result_dir),
-                "--attempt-id",
-                attempt,
-            ],
-            timeout_s=operation_timeout_s,
-        )
+                manifest["file_count"],
+                manifest["total_bytes"],
+                binding.generation,
+                Path("/tmp/exaserve_src"),
+                rank=0,
+            )
+            write_rank_result(rank_result_dir, attempt_id=attempt, payload=receipt)
+        else:
+            prefix = mpi_launch_prefix(
+                plan.num_nodes, scheduler=plan.scale_envelope.scheduler_type
+            )
+            binary = compile_bcast(run_dir / "bcast_build")
+            _run_checked(
+                [*prefix, str(binary), str(clean_package), str(candidate_root)],
+                timeout_s=operation_timeout_s,
+            )
+            _run_checked(
+                [
+                    *prefix,
+                    sys.executable,
+                    "-m",
+                    "exaserve.source_staging",
+                    "--verify-and-publish",
+                    str(candidate_package),
+                    "--expected-hash",
+                    manifest["source_manifest_hash"],
+                    "--expected-files",
+                    str(manifest["file_count"]),
+                    "--expected-bytes",
+                    str(manifest["total_bytes"]),
+                    "--generation",
+                    str(binding.generation),
+                    "--stable-path",
+                    "/tmp/exaserve_src",
+                    "--result-dir",
+                    str(rank_result_dir),
+                    "--attempt-id",
+                    attempt,
+                ],
+                timeout_s=operation_timeout_s,
+            )
         try:
             receipts = [
                 _validate_source_receipt(receipt)

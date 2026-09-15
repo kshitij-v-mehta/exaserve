@@ -284,7 +284,12 @@ def verify_ray_serve_timing_contract(plan) -> None:
         observed = getattr(constants, name, None)
         if observed is None or float(observed) != float(expected):
             mismatches.append(f"{name}: plan={expected}, runtime={observed}")
-    if not getattr(constants, "_exaserve_serve_start_timeout_patch", False):
+    # Only Aurora/XPU declares the compatibility patch that raises
+    # HTTP_PROXY_TIMEOUT above Ray's native value.  Frontier/ROCm deliberately
+    # uses a patch-free profile and verifies the native constant above.
+    if plan.vendor == "xpu" and not getattr(
+        constants, "_exaserve_serve_start_timeout_patch", False
+    ):
         mismatches.append("HTTP_PROXY_TIMEOUT compatibility activation has no sentinel")
     if mismatches:
         raise RuntimeError(
@@ -1517,6 +1522,7 @@ def deploy_model(
             "runtime_env": build_actor_runtime_env(
                 extra_env_vars,
                 receipt_owner_rank=planned_placement.owner_rank,
+                replica_index=replica_index,
             ),
             **(
                 {"resources": {planned_placement.node_resource_keys[0]: 0.001}}

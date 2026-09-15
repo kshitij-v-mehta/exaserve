@@ -9,7 +9,7 @@ engine ``create()`` methods:
 - **Device isolation** — which env var pins a replica to its GPU/tile(s):
   Intel XPU ``ZE_AFFINITY_MASK`` (the Aurora profile forbids
   ``ONEAPI_DEVICE_SELECTOR``),
-  NVIDIA ``CUDA_VISIBLE_DEVICES``, AMD ``ROCR_VISIBLE_DEVICES``.
+  NVIDIA ``CUDA_VISIBLE_DEVICES``, AMD ``HIP_VISIBLE_DEVICES``.
 - **PyTorch device string** — ``xpu`` vs ``cuda`` (ROCm also uses ``cuda``).
 - **Vendor env defaults** and **distributed/PP workarounds** (the XPU
   compiled-DAG env lives here, gated to XPU so it never leaks to CUDA/ROCm).

@@ -56,6 +56,22 @@ else
 fi"""
 
 
+def _site_environment_setup(site_profile) -> tuple[str, Optional[Path]]:
+    """Return the typed environment setup for the selected site."""
+    if site_profile.site_id == "olcf-frontier":
+        raw = os.environ.get("EXASERVE_SOURCE_ENV_SCRIPT", "").strip()
+        if not raw:
+            raise ValueError(
+                "Frontier requires EXASERVE_SOURCE_ENV_SCRIPT to name the shared "
+                "environment script sourced inside the Slurm allocation"
+            )
+        path = Path(raw).expanduser().resolve()
+        if not path.is_file():
+            raise FileNotFoundError(f"Frontier environment script not found: {path}")
+        return "", path
+    return _DEFAULT_ENV_SETUP, None
+
+
 def _private_directory(path: Path) -> Path:
     from .state.atomic import ensure_owned_directory
 
@@ -194,6 +210,7 @@ def _submission_intent_id(
     deployment_plan_hash: str,
     scheduler: str,
     queue: str,
+    qos: str,
     walltime: str,
     account: str,
 ) -> str:
@@ -201,6 +218,7 @@ def _submission_intent_id(
         "deployment_plan_hash": deployment_plan_hash,
         "scheduler": scheduler,
         "queue": queue,
+        "qos": qos,
         "walltime": walltime,
         "account": account,
     }
@@ -224,6 +242,7 @@ def _new_prepared_submission(
     plan,
     site_profile,
     queue: str,
+    qos: str,
     walltime: str,
     project_account: str,
     job_name: Optional[str],
@@ -235,6 +254,7 @@ def _new_prepared_submission(
     run_identity = f"{label}-{attempt[:12]}"  # <= 15, including prefix separator
     deployment_id = f"serve-{attempt}"
     generation = time.time_ns()
+    bootstrap_script, source_env_script = _site_environment_setup(site_profile)
 
     from .plan.io import write_deployment_plan, write_site_profile
 
@@ -256,12 +276,15 @@ def _new_prepared_submission(
         "EXASERVE_GENERATION": str(generation),
         "EXASERVE_RUN_LOG_DIR": str(run_dir),
         "EXASERVE_SITE_PROFILE_PATH": str(site_profile_path),
+        "EXASERVE_SITE_ID": site_profile.site_id,
+        "EXASERVE_SCHEDULER": scheduler.name,
     }
     job_spec = JobSpec(
         command_argv=(sys.executable, "-u", "-m", "exaserve.launcher", str(plan_path)),
         cwd=cfg_path.parent,
         environment=environment,
-        bootstrap_script=_DEFAULT_ENV_SETUP,
+        bootstrap_script=bootstrap_script,
+        source_env_script=source_env_script,
         num_nodes=plan.num_nodes,
         walltime=walltime,
         account=project_account,
@@ -269,9 +292,20 @@ def _new_prepared_submission(
         stdout_dir=log_dir,
         stderr_dir=log_dir,
         queue=queue,
+        qos=qos or None,
         gpus_per_node=plan.num_gpus_per_node,
         filesystems=defaults.filesystems,
         keep_flag=defaults.keep_flag,
+        constraint=(
+            os.environ.get("EXASERVE_SLURM_CONSTRAINT", "nvme")
+            if site_profile.site_id == "olcf-frontier"
+            else None
+        ),
+        network=(
+            os.environ.get("EXASERVE_SLURM_NETWORK", "disable_rdzv_get")
+            if site_profile.site_id == "olcf-frontier"
+            else None
+        ),
         run_identity=run_identity,
     )
     ext = {"slurm": "sbatch", "psij": "psij.sh"}.get(scheduler.name, "pbs")
@@ -330,11 +364,27 @@ def submit_serve(
     raw = load_yaml_mapping_text(config_bytes, source=cfg_path)
     site_profile = default_site_profile()
     topology_plan = compile_deployment_plan(raw, site=site_profile, deployment_id="pending")
-    topology_queue, topology_walltime = default_queue_and_walltime(topology_plan.num_nodes)
+    scheduler = get_scheduler()
+    topology_queue, topology_walltime = default_queue_and_walltime(
+        topology_plan.num_nodes, scheduler=scheduler.name
+    )
     resolved_queue = queue or defaults.queue or topology_queue
+    resolved_qos = (
+        os.environ.get("EXASERVE_SLURM_QOS", "").strip()
+        if scheduler.name == "slurm"
+        else ""
+    )
     resolved_walltime = walltime or defaults.walltime or topology_walltime
     resolved_account = project_account or defaults.project_account
-    scheduler = get_scheduler()
+    if (
+        site_profile.site_id == "olcf-frontier"
+        and project_account is None
+        and not os.environ.get("EXASERVE_PROJECT_ACCOUNT", "").strip()
+    ):
+        raise ValueError(
+            "Frontier requires --project-account or EXASERVE_PROJECT_ACCOUNT; "
+            "the Aurora default account is not valid"
+        )
     if scheduler.name not in site_profile.scheduler_types:
         raise ValueError(
             f"scheduler {scheduler.name!r} is not qualified by SiteProfile "
@@ -344,12 +394,15 @@ def submit_serve(
     from .site import require_execution_qualification
 
     require_execution_qualification(topology_plan, site_profile)
-    resolved_log_dir = (Path(log_dir) if log_dir else cfg_path.parent / "pbs_logs").resolve()
+    resolved_log_dir = (
+        Path(log_dir) if log_dir else cfg_path.parent / f"{scheduler.name}_logs"
+    ).resolve()
     resolved_log_dir.mkdir(parents=True, exist_ok=True)
     intent_id = _submission_intent_id(
         deployment_plan_hash=topology_plan.deployment_plan_hash,
         scheduler=scheduler.name,
         queue=resolved_queue,
+        qos=resolved_qos,
         walltime=resolved_walltime,
         account=resolved_account,
     )
@@ -418,6 +471,7 @@ def submit_serve(
                 plan=topology_plan,
                 site_profile=site_profile,
                 queue=resolved_queue,
+                qos=resolved_qos,
                 walltime=resolved_walltime,
                 project_account=resolved_account,
                 job_name=job_name,

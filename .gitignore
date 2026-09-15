@@ -2,6 +2,9 @@ __pycache__/
 *.pyc
 .env
 .DS_Store
+.idea/
+._*
+nohup.out
 venv/
 .vscode/
 data_local/
@@ -31,6 +34,11 @@ dist.bak.*/
 *.egg-info.bak*/
 # generated plot output
 eval/plot/output/
+deliverables/
+examples/slurm_logs/
+*.jobid
+scripts/frontier/frontier_stack.*.conf
+!scripts/frontier/frontier_stack.conf.example
 
 # Claude Code / process crash dumps
 core.*

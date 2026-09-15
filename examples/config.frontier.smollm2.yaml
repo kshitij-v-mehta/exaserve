@@ -1,0 +1,58 @@
+# One-node, one-GCD Frontier validation deployment using an ungated,
+# English-focused Apache-2.0 model. Download it on a login node first with
+# scripts/frontier/download_smollm2.sh.
+
+validation_mode: true
+num_nodes: 1
+num_gpus_per_node: 1
+node_cpus: 56
+ray_port: 6379
+deployment_name: exaserve_frontier_smollm2
+replica_max_ongoing_requests: 4
+collect_stats: false
+engine: vllm
+vendor: rocm
+accelerator: mi250x-gcd
+request_mode: chat
+streaming_mode: non_streaming
+
+models:
+  - model_id: HuggingFaceTB/SmolLM2-360M-Instruct
+    tensor_parallel_size: 1
+    pipeline_parallel_size: 1
+    max_model_len: 2048
+    size: 1
+    gpu_memory_utilization: 0.50
+    enforce_eager: true
+    enable_log_requests: true
+    max_num_seqs: 8
+    num_replicas: 1
+    num_cpus_per_replica: 4
+
+exposure:
+  mode: PROXIED_INTERNAL
+  advertised_scheme: http
+  advertised_path: /v1
+  network_boundary: trusted_allocation
+  request_body_limit_bytes: 16777216
+
+gateway:
+  kind: haproxy
+  port: 4001
+  backend_port: 8000
+  executable_ref: PATH:haproxy
+  worker_count: 1
+  options:
+    balance: leastconn
+    check_interval: 5000
+    check_fall: 3
+    check_rise: 2
+    stats_port: 9999
+    maxconn: 256
+
+runtime:
+  null_compute: false
+  null_compute_latency_s: 1.0
+  instrumentation: false
+  pp_shard_aware: false
+  clean_stage: false

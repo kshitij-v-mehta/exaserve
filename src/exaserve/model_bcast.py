@@ -369,10 +369,10 @@ def compile_bcast(tools_dir: Path | None = None) -> Path:
     return _compile_target(prepare_bcast_tools(tools_dir), "bcast")
 
 
-def probe_cache_locally(path: Path, *, generation: int) -> dict:
+def probe_cache_locally(path: Path, *, generation: int, rank: int | None = None) -> dict:
     """Probe one model directory on the current host."""
     return {
-        "rank": _runtime_rank(),
+        "rank": _runtime_rank() if rank is None else rank,
         "host": socket.gethostname(),
         "path": str(path),
         "state": get_model_dir_state(path),
@@ -394,7 +394,12 @@ def mpi_launch_prefix(
 
         return shlex.split(override)
     if scheduler == "slurm":
-        return ["srun", f"--nodes={num_nodes}", "--ntasks-per-node=1", "--cpu-bind=none"]
+        return [
+            "srun",
+            f"--nodes={num_nodes}",
+            "--ntasks-per-node=1",
+            "--cpus-per-task=7",
+        ]
     if scheduler != "pbs":
         raise ValueError(f"unsupported model-broadcast scheduler {scheduler!r}")
     return ["mpiexec", "-n", str(num_nodes), "-ppn", "1", "--cpu-bind", "none"]
@@ -417,6 +422,29 @@ def run_cache_probe(path: Path, num_nodes: int, *, binding, scheduler: str = "pb
 
     attempt = uuid.uuid4().hex
     result_dir = create_result_dir(_run_result_root(), "model-cache-probe", attempt)
+    if num_nodes == 1:
+        from .staging_results import write_rank_result
+
+        payload = probe_cache_locally(path, generation=binding.generation, rank=0)
+        write_rank_result(result_dir, attempt_id=attempt, payload=payload)
+        entries = [
+            _validate_cache_probe_result(entry)
+            for entry in load_rank_results(result_dir, attempt_id=attempt)
+        ]
+        by_rank = {entry.get("rank"): entry for entry in entries}
+        from .plan.contracts import same_node
+
+        planned_node = dict(binding.rank_to_node)[0]
+        entry = by_rank.get(0)
+        if (
+            len(entries) != 1
+            or entry is None
+            or not same_node(entry["host"], planned_node)
+            or entry.get("generation") != binding.generation
+            or entry.get("path") != str(path)
+        ):
+            raise RuntimeError("[ModelBcast] One-node cache probe has wrong identity")
+        return [entry]
     cmd = mpi_launch_prefix(num_nodes, scheduler=scheduler) + [
         sys.executable,
         "-m",
@@ -431,7 +459,11 @@ def run_cache_probe(path: Path, num_nodes: int, *, binding, scheduler: str = "pb
         attempt,
     ]
     try:
-        result = run_finite(cmd, timeout_s=1800)
+        result = run_finite(
+            cmd,
+            timeout_s=1800,
+            descendant_exit_grace_s=5.0 if Path(cmd[0]).name == "srun" else 0.0,
+        )
     except (OSError, FiniteProcessError) as exc:
         raise RuntimeError(f"[ModelBcast] Cache probe failed for {path}: {exc}") from exc
     if result.returncode != 0:
@@ -523,7 +555,13 @@ def _marker(path: Path) -> dict:
 
 
 def verify_and_publish_model(
-    candidate: Path, target: Path, *, model_id: str, expected_manifest_hash: str, generation: int
+    candidate: Path,
+    target: Path,
+    *,
+    model_id: str,
+    expected_manifest_hash: str,
+    generation: int,
+    rank: int | None = None,
 ) -> dict:
     from .state.atomic import fsync_directory
 
@@ -589,7 +627,7 @@ def verify_and_publish_model(
     ):
         raise RuntimeError(f"atomic model publication failed for {model_id} at {target}")
     return {
-        "rank": _runtime_rank(),
+        "rank": _runtime_rank() if rank is None else rank,
         "node": socket.gethostname(),
         "generation": generation,
         "model_id": model_id,
@@ -619,40 +657,57 @@ def _model_receipts(
     category = f"model-publish-{hashlib.sha256(model_id.encode()).hexdigest()[:12]}"
     result_dir = create_result_dir(_run_result_root(), category, attempt)
 
-    command = mpi_launch_prefix(num_nodes, scheduler=scheduler) + [
-        sys.executable,
-        "-m",
-        "exaserve.model_bcast",
-        "--verify-model-candidate",
-        str(candidate),
-        "--publish-target",
-        str(target),
-        "--model-id",
-        model_id,
-        "--expected-manifest-hash",
-        manifest_hash,
-        "--generation",
-        str(generation),
-        "--result-dir",
-        str(result_dir),
-        "--attempt-id",
-        attempt,
-    ]
-    try:
-        result = run_finite(command, timeout_s=1800)
-    except (OSError, FiniteProcessError) as exc:
-        raise RuntimeError(f"model publication command failed: {exc}") from exc
-    if result.stdout:
-        print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
-    if result.stderr:
-        print(
-            result.stderr,
-            end="" if result.stderr.endswith("\n") else "\n",
-            file=sys.stderr,
-            flush=True,
+    if num_nodes == 1:
+        from .staging_results import write_rank_result
+
+        receipt = verify_and_publish_model(
+            candidate,
+            target,
+            model_id=model_id,
+            expected_manifest_hash=manifest_hash,
+            generation=generation,
+            rank=0,
         )
-    if result.returncode:
-        raise RuntimeError(f"model publication for {model_id} exited {result.returncode}")
+        write_rank_result(result_dir, attempt_id=attempt, payload=receipt)
+    else:
+        command = mpi_launch_prefix(num_nodes, scheduler=scheduler) + [
+            sys.executable,
+            "-m",
+            "exaserve.model_bcast",
+            "--verify-model-candidate",
+            str(candidate),
+            "--publish-target",
+            str(target),
+            "--model-id",
+            model_id,
+            "--expected-manifest-hash",
+            manifest_hash,
+            "--generation",
+            str(generation),
+            "--result-dir",
+            str(result_dir),
+            "--attempt-id",
+            attempt,
+        ]
+        try:
+            result = run_finite(
+                command,
+                timeout_s=1800,
+                descendant_exit_grace_s=5.0 if Path(command[0]).name == "srun" else 0.0,
+            )
+        except (OSError, FiniteProcessError) as exc:
+            raise RuntimeError(f"model publication command failed: {exc}") from exc
+        if result.stdout:
+            print(result.stdout, end="" if result.stdout.endswith("\n") else "\n", flush=True)
+        if result.stderr:
+            print(
+                result.stderr,
+                end="" if result.stderr.endswith("\n") else "\n",
+                file=sys.stderr,
+                flush=True,
+            )
+        if result.returncode:
+            raise RuntimeError(f"model publication for {model_id} exited {result.returncode}")
     receipts = [
         _validate_model_receipt(receipt)
         for receipt in load_rank_results(result_dir, attempt_id=attempt)
@@ -699,7 +754,7 @@ def bcast_models(
     """
     if binding is None or len(binding.rank_to_node) != num_nodes:
         raise RuntimeError("model staging requires the exact AllocationBinding")
-    binary_path = compile_bcast()
+    binary_path = compile_bcast() if num_nodes > 1 else None
 
     lustre_model_paths = stage_models(model_configs, lustre_path)
     local_model_paths: Dict[str, str] = {}
@@ -848,16 +903,23 @@ def bcast_models(
                 f"across {num_nodes} node(s)...",
                 flush=True,
             )
-            run_finite(
-                mpi_launch_prefix(num_nodes, scheduler=scheduler)
-                + [
+            if num_nodes == 1:
+                candidate_root.mkdir(mode=0o700, parents=True)
+                shutil.copytree(source_path, candidate_model, symlinks=False)
+            else:
+                command = mpi_launch_prefix(num_nodes, scheduler=scheduler) + [
                     str(binary_path),
                     str(bcast_source),
                     str(candidate_root),
-                ],
-                timeout_s=1800,
-                check=True,
-            )
+                ]
+                run_finite(
+                    command,
+                    timeout_s=1800,
+                    check=True,
+                    descendant_exit_grace_s=(
+                        5.0 if Path(command[0]).name == "srun" else 0.0
+                    ),
+                )
         receipts = _model_receipts(
             candidate=candidate_model,
             target=target_path,

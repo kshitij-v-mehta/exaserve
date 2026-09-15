@@ -317,6 +317,42 @@ def test_bound_serve_actor_rebinds_rank_local_receipt_socket(monkeypatch):
     )
 
 
+def test_bound_serve_replicas_get_distinct_node_local_triton_caches(monkeypatch):
+    from exaserve.actor_runtime import build_actor_runtime_env
+    from exaserve.state.process_ownership import generation_runtime_root
+
+    monkeypatch.setenv("EXASERVE_DEPLOYMENT_ID", "four-node-test")
+    monkeypatch.setenv("EXASERVE_GENERATION", "17")
+    monkeypatch.setenv("TRITON_CACHE_DIR", "/shared/unsafe-cache")
+
+    first = build_actor_runtime_env(receipt_owner_rank=2, replica_index=16)["env_vars"]
+    second = build_actor_runtime_env(receipt_owner_rank=2, replica_index=17)["env_vars"]
+
+    expected_root = generation_runtime_root("four-node-test", 17, 2)
+    assert first["TRITON_CACHE_DIR"] == f"{expected_root}/triton/replica-16"
+    assert second["TRITON_CACHE_DIR"] == f"{expected_root}/triton/replica-17"
+    assert first["TRITON_CACHE_DIR"] != second["TRITON_CACHE_DIR"]
+
+
+@pytest.mark.parametrize("replica_index", [True, -1, "2"])
+def test_bound_serve_actor_rejects_invalid_replica_index(monkeypatch, replica_index):
+    from exaserve.actor_runtime import build_actor_runtime_env
+
+    monkeypatch.setenv("EXASERVE_DEPLOYMENT_ID", "four-node-test")
+    monkeypatch.setenv("EXASERVE_GENERATION", "17")
+    with pytest.raises(ValueError, match="replica_index"):
+        build_actor_runtime_env(receipt_owner_rank=1, replica_index=replica_index)
+
+
+def test_replica_index_requires_bound_owner_rank(monkeypatch):
+    from exaserve.actor_runtime import build_actor_runtime_env
+
+    monkeypatch.setenv("EXASERVE_DEPLOYMENT_ID", "four-node-test")
+    monkeypatch.setenv("EXASERVE_GENERATION", "17")
+    with pytest.raises(ValueError, match="requires receipt_owner_rank"):
+        build_actor_runtime_env(replica_index=0)
+
+
 @pytest.mark.parametrize(
     "field",
     [

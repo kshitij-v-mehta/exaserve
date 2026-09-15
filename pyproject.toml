@@ -15,7 +15,9 @@ dependencies = [
 
 [project.optional-dependencies]
 server = [
-    "fastapi>=0.100",
+    # FastAPI 0.139.2 added an internal threading.Lock that Ray Serve 2.53
+    # cannot serialize through @serve.ingress.
+    "fastapi==0.136.0",
     # The generated overlay and private-API capability profile are exact-byte
     # qualified against this stack. A broader dependency range would install
     # versions that ExaServe intentionally rejects before launch.

@@ -2,10 +2,9 @@
 UNTESTED — implemented from ROCm/Ray/vLLM conventions; validate on AMD hardware.
 
 Notes for the first AMD bring-up:
-- Device isolation uses ``ROCR_VISIBLE_DEVICES`` (the ROCr-runtime mask, which
-  takes precedence over the HIP-level ``HIP_VISIBLE_DEVICES``). A site that
-  requires a different contract needs a separately named, hash-bearing vendor
-  profile rather than an inherited environment override.
+- Device isolation uses ``HIP_VISIBLE_DEVICES`` because Ray 2.53 rejects
+  ``ROCR_VISIBLE_DEVICES``. Any scheduler-provided ROCr mask is translated by
+  the Frontier environment before Ray imports.
 - PyTorch-ROCm reports the device as ``cuda`` (HIP masquerades as CUDA), so
   ``torch_device()`` returns ``cuda`` and vLLM's ROCm build auto-detects.
 - MI250X/MI300 expose multiple GCDs; on those, ``device_ids`` are GCD indices.
@@ -23,7 +22,9 @@ class ROCmVendor(VendorBackend):
     name = "rocm"
 
     def isolate_devices(self, device_ids: List[int], engine_name: str = "vllm") -> None:
-        var = "ROCR_VISIBLE_DEVICES"
+        # Ray 2.53 raises during import if ROCR_VISIBLE_DEVICES is present.
+        os.environ.pop("ROCR_VISIBLE_DEVICES", None)
+        var = "HIP_VISIBLE_DEVICES"
         if device_ids:
             os.environ[var] = ",".join(str(g) for g in device_ids)
         else:

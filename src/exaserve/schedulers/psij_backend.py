@@ -80,10 +80,13 @@ class PSIJScheduler(SchedulerBackend):
                 attrs[f"{executor}.l"] = f"filesystems={spec.filesystems}"
             if spec.keep_flag:
                 attrs[f"{executor}.k"] = spec.keep_flag
-        elif executor == "slurm" and spec.gpus_per_node:
-            # PSI/J's Slurm template only maps gpus-per-task; per-node is the
-            # HPC-site idiom (e.g. Delta), so inject it as a custom directive.
-            attrs["slurm.gpus-per-node"] = spec.gpus_per_node
+        elif executor == "slurm":
+            if spec.gpus_per_node:
+                # PSI/J's Slurm template only maps gpus-per-task; per-node is the
+                # HPC-site idiom (e.g. Delta), so inject it as a custom directive.
+                attrs["slurm.gpus-per-node"] = spec.gpus_per_node
+            if spec.qos:
+                attrs["slurm.qos"] = spec.qos
         return attrs
 
     def render_job(self, spec: JobSpec) -> str:
