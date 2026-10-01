@@ -1263,7 +1263,9 @@ def _materialize_variant(
         runtime_dir=ensure_dir(os.path.join(root_dir, "runtime")),
     )
     runtime_manifest_path = os.path.join(bundle.runtime_dir, f"{backend_name}_runtime.yaml")
-    scheduler = _resolve_scheduler(spec.scheduler)
+    from exaserve.site import default_site_profile as _active_site_profile
+
+    scheduler = _resolve_scheduler(spec.scheduler, site_id=_active_site_profile().site_id)
     semantic_plan_path = os.path.join(bundle.runtime_dir, "run.plan.json")
     deployment_plan_path = os.path.join(bundle.runtime_dir, "deployment.plan.json")
     site_profile_path = os.path.join(bundle.runtime_dir, "site.profile.json")
@@ -1383,11 +1385,11 @@ def _materialize_variant(
     return run_plan
 
 
-def _resolve_scheduler(spec: SchedulerSpec) -> SchedulerSpec:
+def _resolve_scheduler(spec: SchedulerSpec, *, site_id: str) -> SchedulerSpec:
     queue = spec.queue
     walltime = spec.walltime
     if not queue or not walltime:
-        default_queue, default_walltime = default_queue_and_walltime(spec.nodes)
+        default_queue, default_walltime = default_queue_and_walltime(spec.nodes, site_id=site_id)
         if not queue:
             queue = default_queue
         if not walltime:
