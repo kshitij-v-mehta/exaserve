@@ -73,15 +73,33 @@ def test_duplicate_yaml_keys_are_rejected_before_plan_compilation(tmp_path):
         load_or_compile_plan(str(path), deployment_id="duplicate-check")
 
 
-def test_every_shipped_yaml_uses_the_canonical_schema():
+def test_every_shipped_yaml_uses_the_canonical_schema(monkeypatch):
+    from exaserve.site import FRONTIER_SITE_ID, default_site_profile
+    from exaserve.yaml_support import load_yaml_mapping_text
+
     repo_root = Path(__file__).resolve().parents[1]
     paths = sorted((repo_root / "examples").glob("*.yaml")) + sorted(
         (repo_root / "scripts/hardening").glob("config.*.yaml")
     )
     assert paths
+    frontier_examples = 0
     for path in paths:
-        plan = load_or_compile_plan(str(path), deployment_id="schema-check")
+        # Each example compiles against the site its accelerator vendor names:
+        # ROCm examples are Frontier deployments, everything else is Aurora.
+        raw = load_yaml_mapping_text(path.read_bytes(), source=path)
+        if raw.get("vendor") == "rocm":
+            frontier_examples += 1
+            monkeypatch.setenv("EXASERVE_SITE_ID", FRONTIER_SITE_ID)
+            monkeypatch.setenv("EXASERVE_MODEL_STORAGE_PATH", "/lustre/orion/prj000/models")
+        else:
+            monkeypatch.delenv("EXASERVE_SITE_ID", raising=False)
+        default_site_profile.cache_clear()
+        try:
+            plan = load_or_compile_plan(str(path), deployment_id="schema-check")
+        finally:
+            default_site_profile.cache_clear()
         assert plan.models, path
+    assert frontier_examples >= 1
 
 
 def test_retired_nested_schema_is_rejected_explicitly():

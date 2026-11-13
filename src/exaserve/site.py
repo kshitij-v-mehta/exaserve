@@ -238,6 +238,15 @@ def frontier_site_profile() -> SiteProfile:
     ).finalize()
 
 
+def active_site_id() -> str:
+    """The selected site id, without constructing its SiteProfile.
+
+    Callers that need only the identity (for example scheduler queue
+    defaults) must not require the model-storage inputs a full profile needs.
+    """
+    return os.environ.get("EXASERVE_SITE_ID", "").strip() or AURORA_SITE_ID
+
+
 @lru_cache(maxsize=4)
 def default_site_profile(site_id: str = "", fallback_model_storage_path: str = "") -> SiteProfile:
     """The site profile for this deployment host.
@@ -250,7 +259,7 @@ def default_site_profile(site_id: str = "", fallback_model_storage_path: str = "
     tooling passes the path its own site configuration resolved; serving entry
     points pass none and fail closed.
     """
-    site_id = site_id or os.environ.get("EXASERVE_SITE_ID", AURORA_SITE_ID)
+    site_id = site_id or active_site_id()
     if site_id == FRONTIER_SITE_ID:
         return frontier_site_profile()
     from .compat.profile import default_profile

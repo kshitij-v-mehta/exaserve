@@ -1349,9 +1349,9 @@ def _materialize_variant(
         runtime_dir=ensure_dir(os.path.join(root_dir, "runtime")),
     )
     runtime_manifest_path = os.path.join(bundle.runtime_dir, f"{backend_name}_runtime.yaml")
-    from exaserve.site import default_site_profile as _active_site_profile
+    from exaserve.site import active_site_id
 
-    scheduler = _resolve_scheduler(spec.scheduler, site_id=_active_site_profile().site_id)
+    scheduler = _resolve_scheduler(spec.scheduler, site_id=active_site_id())
     semantic_plan_path = os.path.join(bundle.runtime_dir, "run.plan.json")
     deployment_plan_path = os.path.join(bundle.runtime_dir, "deployment.plan.json")
     site_profile_path = os.path.join(bundle.runtime_dir, "site.profile.json")
