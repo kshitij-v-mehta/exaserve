@@ -52,6 +52,8 @@ class JobSpec:
     stderr_dir: Path
     command_argv: tuple[str, ...]
     queue: str = ""
+    qos: Optional[str] = None
+    constraint: Optional[str] = None
     cwd: Optional[Path] = None
     environment: Mapping[str, str] = field(default_factory=dict)
     bootstrap_script: str = ""
@@ -90,6 +92,8 @@ class JobSpec:
             "account",
             "job_name",
             "queue",
+            "qos",
+            "constraint",
             "filesystems",
             "keep_flag",
             "mail_user",
@@ -286,17 +290,40 @@ _QUEUE_DEFAULTS: Mapping[str, tuple[tuple[Optional[int], str, str], ...]] = Mapp
             (255, "debug-scaling", "01:00:00"),
             (None, "prod", "02:00:00"),
         ),
-        # UNVERIFIED scaffold: the ``batch`` partition with a one-hour limit
-        # that fits every Frontier node-count bin.  Confirm against OLCF policy
-        # and add QOS handling before relying on it.
+        # Frontier's default ``batch`` partition with a one-hour request.
+        # Small validation jobs normally pass ``--queue extended`` with
+        # ``--qos debug`` (two-hour QOS limit) instead.
         "olcf-frontier": ((None, "batch", "01:00:00"),),
     }
 )
 
 
-def default_queue_and_walltime(
-    num_nodes: int, *, site_id: str = "alcf-aurora"
-) -> tuple[str, str]:
+@dataclass(frozen=True)
+class SiteJobPolicy:
+    """Per-site batch-request facts that are not deployment topology.
+
+    ``constraint`` is a node feature every job needs (Frontier's node-local
+    NVMe under ``/mnt/bb`` exists only with ``--constraint=nvme``).
+    ``request_gpus`` controls whether the job asks the scheduler for GPU
+    generic resources.  Frontier nodes are allocated whole and every GCD is
+    visible to steps without a GRES request, while a GRES request makes Slurm
+    inject a per-step ROCr mask that competes with Ray's device assignment.
+    """
+
+    constraint: Optional[str] = None
+    request_gpus: bool = True
+
+
+_SITE_JOB_POLICY: Mapping[str, SiteJobPolicy] = MappingProxyType(
+    {"olcf-frontier": SiteJobPolicy(constraint="nvme", request_gpus=False)}
+)
+
+
+def site_job_policy(site_id: str) -> SiteJobPolicy:
+    return _SITE_JOB_POLICY.get(site_id, SiteJobPolicy())
+
+
+def default_queue_and_walltime(num_nodes: int, *, site_id: str = "alcf-aurora") -> tuple[str, str]:
     """Conservative queue and walltime for a topology without explicit values.
 
     ``site_id`` defaults to Aurora for backward compatibility; the submission
@@ -308,8 +335,7 @@ def default_queue_and_walltime(
         rules = _QUEUE_DEFAULTS[site_id]
     except KeyError:
         raise ValueError(
-            f"no default queue/walltime for site {site_id!r}; "
-            "set the queue and walltime explicitly"
+            f"no default queue/walltime for site {site_id!r}; set the queue and walltime explicitly"
         ) from None
     for limit, queue, walltime in rules:
         if limit is None or num_nodes <= limit:

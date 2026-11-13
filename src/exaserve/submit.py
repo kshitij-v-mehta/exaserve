@@ -29,6 +29,7 @@ from .schedulers import (
     SchedulerState,
     SubmissionRejected,
     default_queue_and_walltime,
+    site_job_policy,
     get_scheduler,
     queue_walltime_violation,
 )
@@ -51,29 +52,58 @@ _ACTIVE_OR_UNCERTAIN = {
 }
 
 
+_ENV_SCRIPT_VARIABLES = ("EXASERVE_ENV_SCRIPT", "EXASERVE_ENV_SCRIPT_AURORA")
+
+
 def _default_env_setup() -> str:
     """Return the job's site preparation, JobSpec's sole raw shell seam.
 
-    ``EXASERVE_ENV_SCRIPT_AURORA`` names the site environment script that the
+    ``EXASERVE_ENV_SCRIPT`` (or its Aurora-era name
+    ``EXASERVE_ENV_SCRIPT_AURORA``) names the site environment script that the
     job sources, as for evaluation runs. It is resolved at submission, so the
-    job does not depend on the submitter's shell. It has no default: the site's
-    unversioned frameworks module is not the profiled stack.
+    job does not depend on the submitter's shell. It has no default: a site's
+    unversioned module is not the profiled stack.
     """
-    configured = os.environ.get("EXASERVE_ENV_SCRIPT_AURORA", "").strip()
+    name, configured = next(
+        (
+            (variable, os.environ.get(variable, "").strip())
+            for variable in _ENV_SCRIPT_VARIABLES
+            if os.environ.get(variable, "").strip()
+        ),
+        (_ENV_SCRIPT_VARIABLES[0], ""),
+    )
     if not configured:
         raise ValueError(
-            "EXASERVE_ENV_SCRIPT_AURORA is not set; set it to the absolute path of the site "
+            "EXASERVE_ENV_SCRIPT is not set; set it to the absolute path of the site "
             "environment script that the job sources (see 'Prepare the runtime' in "
             "docs/getting_started.md)"
         )
     script = Path(configured).expanduser()
     if not script.is_absolute():
-        raise ValueError(f"EXASERVE_ENV_SCRIPT_AURORA must be an absolute path, got {configured!r}")
+        raise ValueError(f"{name} must be an absolute path, got {configured!r}")
     if not script.is_file():
-        raise ValueError(
-            f"EXASERVE_ENV_SCRIPT_AURORA names {str(script)!r}, which is not an existing file"
-        )
+        raise ValueError(f"{name} names {str(script)!r}, which is not an existing file")
     return f"source {shlex.quote(str(script))}"
+
+
+def _job_python() -> str:
+    """Interpreter the batch job runs the launcher with.
+
+    Defaults to the submitting interpreter, which is correct where login and
+    compute nodes share the site image (Aurora's ``/opt/aurora``).  Where the
+    serving runtime exists only inside the job, after its environment script
+    unpacked it onto node-local storage (Frontier's ``/tmp/exaserve-site``),
+    ``EXASERVE_JOB_PYTHON`` names that absolute path.  The launcher still
+    qualifies the executable against the SiteProfile before doing any work.
+    """
+    configured = os.environ.get("EXASERVE_JOB_PYTHON", "").strip()
+    if not configured:
+        return sys.executable
+    if not os.path.isabs(configured) or os.path.normpath(configured) != configured:
+        raise ValueError(
+            f"EXASERVE_JOB_PYTHON must be a normalized absolute path, got {configured!r}"
+        )
+    return configured
 
 
 def _require_current_bootstrap(
@@ -82,7 +112,7 @@ def _require_current_bootstrap(
     """Refuse to reuse a prepared job that runs another site preparation.
 
     The bootstrap is not part of the submission intent identity, so a retry
-    after EXASERVE_ENV_SCRIPT_AURORA changed would otherwise submit the stored
+    after EXASERVE_ENV_SCRIPT changed would otherwise submit the stored
     job script, which still sources the old environment script.
     """
     from .state.atomic import regular_file_reader
@@ -97,7 +127,7 @@ def _require_current_bootstrap(
     stored = " and ".join(repr(line) for line in lines if line.startswith(("source ", "module ")))
     raise RuntimeError(
         f"prepared job script {job_script_path} runs {stored or 'another site preparation'}, "
-        f"not {bootstrap_script!r} from the current EXASERVE_ENV_SCRIPT_AURORA; use a fresh "
+        f"not {bootstrap_script!r} from the current EXASERVE_ENV_SCRIPT; use a fresh "
         f"--log-dir, or remove the intent record {intent_path} to prepare a new job"
     )
 
@@ -242,6 +272,8 @@ def _submission_intent_id(
     queue: str,
     walltime: str,
     account: str,
+    qos: Optional[str] = None,
+    constraint: Optional[str] = None,
 ) -> str:
     semantic_input = {
         "deployment_plan_hash": deployment_plan_hash,
@@ -250,6 +282,11 @@ def _submission_intent_id(
         "walltime": walltime,
         "account": account,
     }
+    # Added only when present so existing (PBS) intent identities are stable.
+    if qos:
+        semantic_input["qos"] = qos
+    if constraint:
+        semantic_input["constraint"] = constraint
     return hashlib.sha256(
         json.dumps(semantic_input, sort_keys=True, separators=(",", ":")).encode()
     ).hexdigest()
@@ -275,6 +312,9 @@ def _new_prepared_submission(
     job_name: Optional[str],
     intent_id: str,
     bootstrap_script: str,
+    qos: Optional[str] = None,
+    constraint: Optional[str] = None,
+    request_gpus: bool = True,
 ) -> tuple[dict, str]:
     """Persist canonical artifacts and render one exact scheduler job."""
     label = re.sub(r"[^A-Za-z0-9]", "", job_name or "es")[:2] or "es"
@@ -305,7 +345,7 @@ def _new_prepared_submission(
         "EXASERVE_SITE_PROFILE_PATH": str(site_profile_path),
     }
     job_spec = JobSpec(
-        command_argv=(sys.executable, "-u", "-m", "exaserve.launcher", str(plan_path)),
+        command_argv=(_job_python(), "-u", "-m", "exaserve.launcher", str(plan_path)),
         cwd=cfg_path.parent,
         environment=environment,
         environment_unset=tuple(site_profile.environment_unset),
@@ -317,7 +357,9 @@ def _new_prepared_submission(
         stdout_dir=log_dir,
         stderr_dir=log_dir,
         queue=queue,
-        gpus_per_node=plan.num_gpus_per_node,
+        qos=qos,
+        constraint=constraint,
+        gpus_per_node=plan.num_gpus_per_node if request_gpus else None,
         filesystems=defaults.filesystems,
         keep_flag=defaults.keep_flag,
         run_identity=run_identity,
@@ -355,6 +397,7 @@ def submit_serve(
     log_dir: Optional[str | os.PathLike] = None,
     dry_run: bool = False,
     force_new: bool = False,
+    qos: Optional[str] = None,
 ) -> str:
     """Compile, persist, and submit at most one job for one intent.
 
@@ -386,8 +429,11 @@ def submit_serve(
     resolved_account = project_account or defaults.project_account
     if not resolved_account:
         raise ValueError(
-            "no PBS allocation account: pass --project-account or set EXASERVE_PROJECT_ACCOUNT"
+            "no allocation account: pass --project-account or set EXASERVE_PROJECT_ACCOUNT"
         )
+    job_policy = site_job_policy(site_profile.site_id)
+    resolved_qos = qos or defaults.qos
+    resolved_constraint = defaults.constraint or job_policy.constraint
     # Resolved before any directory or file is written, so a bad value leaves
     # no partial submission behind.
     bootstrap_script = _default_env_setup()
@@ -412,6 +458,8 @@ def submit_serve(
         queue=resolved_queue,
         walltime=resolved_walltime,
         account=resolved_account,
+        qos=resolved_qos,
+        constraint=resolved_constraint,
     )
     intent_dir = _private_directory(resolved_log_dir / "submission_intents")
     intent_path = intent_dir / f"{intent_id}.json"
@@ -486,6 +534,9 @@ def submit_serve(
                 job_name=job_name,
                 intent_id=intent_id,
                 bootstrap_script=bootstrap_script,
+                qos=resolved_qos,
+                constraint=resolved_constraint,
+                request_gpus=job_policy.request_gpus,
             )
         if dry_run:
             sys.stderr.write(
@@ -607,6 +658,7 @@ def _serve_submit_argparser() -> argparse.ArgumentParser:
     parser.add_argument("--job-id-file", default=None)
     parser.add_argument("--queue", default=None)
     parser.add_argument("--walltime", default=None)
+    parser.add_argument("--qos", default=None, help="Slurm QOS (or EXASERVE_DEFAULT_QOS)")
     parser.add_argument("--project-account", default=None)
     parser.add_argument("--job-name", default=None, help="Readable two-character job-name prefix")
     parser.add_argument("--log-dir", default=None)
@@ -629,6 +681,7 @@ def serve_submit_main() -> int:
         job_id_file=args.job_id_file,
         queue=args.queue,
         walltime=args.walltime,
+        qos=args.qos,
         project_account=args.project_account,
         job_name=args.job_name,
         log_dir=args.log_dir,

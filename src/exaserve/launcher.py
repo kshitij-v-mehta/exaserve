@@ -373,10 +373,19 @@ def run(config_path: str) -> int:
     try:
         from .compat.activator import CompatibilityActivator
 
+        # The immutable plan selects the vendor's compatibility family; the
+        # activator's ambient EXASERVE_VENDOR fallback (default xpu) would
+        # otherwise activate Aurora's profile for a ROCm or CUDA plan.
         activator = CompatibilityActivator(
             deployment_id=plan.deployment_id,
             generation=generation,
+            vendor=plan.vendor,
         )
+        if activator.profile.profile_id != plan.compatibility_profile_hash:
+            raise RuntimeError(
+                "runtime compatibility profile does not match DeploymentPlan: "
+                f"profile={activator.profile.profile_id}, plan={plan.compatibility_profile_hash}"
+            )
         activator.activate("supervisor", apply_fn=lambda: None)
         os.environ["EXASERVE_COMPAT_PROFILE_ID"] = activator.profile.profile_id
         _log(

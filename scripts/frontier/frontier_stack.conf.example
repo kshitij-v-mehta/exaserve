@@ -1,0 +1,45 @@
+# Frontier ExaServe stack configuration.  Copy outside the checkout, set the
+# three site-specific paths, and pass the copy to the scripts in this
+# directory.  Everything below the "Pinned stack" line is part of the stack
+# identity: changing it requires a new archive name and a new compatibility
+# profile (src/exaserve/compat/profile.py).
+
+# --- Site-specific paths -----------------------------------------------------
+# Absolute, shared (Orion) directory that receives sources, logs and the
+# runtime archive.
+export EXASERVE_STACK_ROOT="/lustre/orion/PROJECT/world-shared/USER/exaserve-frontier"
+# ExaServe checkout that the job installs (as a wheel) onto every node.
+export EXASERVE_SOURCE_DIR="/lustre/orion/PROJECT/world-shared/USER/exaserve"
+# Allocation account used by the build job.
+export EXASERVE_FRONTIER_ACCOUNT="PROJECT"
+
+# --- Pinned stack --------------------------------------------------------------
+export EXASERVE_STACK_NAME="py312-rocm711-vllm015"
+# Node-local prefix.  Must stay below the SiteProfile site root
+# (exaserve.site.FRONTIER_SITE_RUNTIME_ROOT = /tmp/exaserve-site).  The stack is
+# built at this exact path and unpacked at the same path on every node, so no
+# relocation is needed.
+export EXASERVE_RUNTIME_PREFIX="/tmp/exaserve-site/${EXASERVE_STACK_NAME}"
+export EXASERVE_RUNTIME_ARCHIVE="${EXASERVE_STACK_ROOT}/runtime/${EXASERVE_STACK_NAME}.tar.zst"
+
+export EXASERVE_FRONTIER_PRGENV_VERSION="8.7.0"
+export EXASERVE_FRONTIER_ROCM_VERSION="7.1.1"
+export EXASERVE_FRONTIER_MINIFORGE_VERSION="23.11.0-0"
+export PYTHON_VERSION="3.12.12"
+export TORCH_ROCM_INDEX="https://download.pytorch.org/whl/rocm7.1"
+export TORCH_VERSION="2.10.0+rocm7.1"
+export TORCHVISION_VERSION="0.25.0+rocm7.1"
+export TORCHAUDIO_VERSION="2.10.0+rocm7.1"
+export VLLM_GIT_TAG="v0.15.0"
+# vLLM stamps "+rocm<major><minor><patch>" from the ROCm it was built against.
+export EXPECTED_VLLM_VERSION="0.15.0+rocm711"
+export RAY_VERSION="2.53.0"
+export TRANSFORMERS_VERSION="4.57.6"
+export MPI4PY_VERSION="4.1.1"
+# Ray Serve 2.53 is validated with FastAPI 0.136.0; grpcio-tools 1.76 keeps
+# protobuf below 7, whose removed FieldDescriptor.LABEL_REPEATED Ray uses.
+export FASTAPI_VERSION="0.136.0"
+export GRPCIO_TOOLS_VERSION="1.76.0"
+export HAPROXY_VERSION="3.1.6"
+export HAPROXY_SOURCE_SHA256="21852e4a374bb8d9b3dda5dc834afe6557f422d7029f4fe3eac3c305f5124760"
+export PYTORCH_ROCM_ARCH="gfx90a"

@@ -1445,6 +1445,7 @@ def stage(
     from .model_bcast import (
         bootstrap_application_environment,
         cleanup_native_candidates,
+        EXECUTABLE_TRANSFER_SCHEDULERS,
         compile_bcast,
         mpi_launch_prefix,
         resolve_bcast_executable,
@@ -1507,7 +1508,7 @@ def stage(
     scheduler = plan.scale_envelope.scheduler_type
     binary = (
         compile_bcast(site_profile=site_profile)
-        if scheduler == "pbs"
+        if scheduler in EXECUTABLE_TRANSFER_SCHEDULERS
         else resolve_bcast_executable(scheduler=scheduler, site_profile=site_profile)
     )
     started = time.monotonic()
@@ -1546,7 +1547,7 @@ def stage(
             plan.num_nodes,
             scheduler=scheduler,
             application_cwd="/tmp",
-            transfer_executable=(scheduler == "pbs"),
+            transfer_executable=(scheduler in EXECUTABLE_TRANSFER_SCHEDULERS),
             application_environment=native_application_environment,
         )
         try:
@@ -1574,7 +1575,7 @@ def stage(
                     scheduler=scheduler,
                     application_cwd=Path("/tmp"),
                     application_environment=native_application_environment,
-                    transfer_executable=(scheduler == "pbs"),
+                    transfer_executable=(scheduler in EXECUTABLE_TRANSFER_SCHEDULERS),
                     timeout_s=min(300.0, operation_timeout_s),
                 )
             except BaseException as cleanup_exc:
@@ -1662,7 +1663,7 @@ def stage(
                 scheduler=scheduler,
                 application_cwd=Path("/tmp"),
                 application_environment=native_application_environment,
-                transfer_executable=(scheduler == "pbs"),
+                transfer_executable=(scheduler in EXECUTABLE_TRANSFER_SCHEDULERS),
                 timeout_s=min(300.0, operation_timeout_s),
             ),
         )

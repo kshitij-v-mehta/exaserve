@@ -45,6 +45,11 @@ does not change this demonstrated scale.
   CUDA/ROCm, SGLang, streaming, public or direct exposure and other gateways are
   unsupported or validation-only.
 
+- **OLCF Frontier:** an unqualified `olcf-frontier` profile (Slurm, ROCm
+  MI250X, vLLM) exists for validation-mode bring-up only; it has no scale
+  envelope and no hardware evidence in this tree. See
+  [deploy_frontier.md](../deploy_frontier.md).
+
 ## What a new qualification requires
 
 1. One clean candidate: sdist and wheel built in an isolated environment; the

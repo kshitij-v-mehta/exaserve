@@ -32,6 +32,8 @@ class SiteDefaults:
     walltime: Optional[str]
     filesystems: str
     keep_flag: str
+    qos: Optional[str] = None
+    constraint: Optional[str] = None
 
 
 _DEFAULTS = SiteDefaults(
@@ -55,4 +57,6 @@ def get_site_defaults() -> SiteDefaults:
         walltime=walltime,
         filesystems=os.environ.get("EXASERVE_DEFAULT_FILESYSTEMS", _DEFAULTS.filesystems),
         keep_flag=os.environ.get("EXASERVE_PBS_KEEP_FLAG", _DEFAULTS.keep_flag),
+        qos=os.environ.get("EXASERVE_DEFAULT_QOS", "").strip() or None,
+        constraint=os.environ.get("EXASERVE_DEFAULT_CONSTRAINT", "").strip() or None,
     )

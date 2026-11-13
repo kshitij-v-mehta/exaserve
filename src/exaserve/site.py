@@ -132,12 +132,45 @@ _COMMON_PREPARED_ENVIRONMENT = tuple(
     item for item in _AURORA_PREPARED_ENVIRONMENT if item[0] not in _AURORA_ONLY_PREPARED_NAMES
 )
 
-# Frontier (ROCm) vendor/network environment.  Deliberately empty at scaffold
-# time: RCCL/libfabric (``NCCL_SOCKET_IFNAME``, ``FI_*``), HIP/ROCr visibility
-# and Ray's AMD accelerator-manager contract are bring-up findings, and a
-# guessed value here would become hash-bearing site fact.  Add entries only
-# with the one-node evidence that justifies them.
+# Frontier (ROCm) prepared environment.  Only the vendor-neutral Ray and
+# threading controls are fixed today.  RCCL/libfabric settings
+# (``NCCL_SOCKET_IFNAME``, ``FI_*``) are added only with multi-node TP/PP
+# evidence; a guessed value here would become a hash-bearing site fact.
 _FRONTIER_PREPARED_ENVIRONMENT = _COMMON_PREPARED_ENVIRONMENT
+
+# Node-local root of the prepared Frontier serving runtime (interpreter, Ray,
+# vLLM, HAProxy).  The job environment script unpacks one immutable stack
+# archive here on every allocated node before ExaServe starts, so no worker
+# executes its interpreter from Orion or NFS/DVS.  It plays the role of
+# Aurora's /opt/aurora image, but is a writable tmpfs: its immutability is an
+# operator contract (the archive), not a mount property, and the declaration
+# below records exactly that.
+FRONTIER_SITE_RUNTIME_ROOT = "/tmp/exaserve-site"
+
+# Mount facts recorded on Frontier compute nodes (probe job 5919005,
+# 2026-11-13).  Paths are the compute-node view: home, project and software
+# trees are Cray DVS projections there (NFS on login nodes), and ``/mnt/bb``
+# exists only for jobs that request ``--constraint=nvme``.
+_FRONTIER_FILESYSTEM_SEMANTICS = (
+    ("local_root:/mnt/bb", "node_local;fstype=xfs;readonly=false"),
+    ("local_root:/tmp", "node_local;fstype=tmpfs;readonly=false"),
+    ("local_stage", "node_local"),
+    ("shared", "lustre"),
+    ("shared_root:/autofs/nccs-svm1_home1", "shared;fstype=dvs;readonly=false"),
+    ("shared_root:/autofs/nccs-svm1_home2", "shared;fstype=dvs;readonly=false"),
+    ("shared_root:/autofs/nccs-svm1_proj", "shared;fstype=dvs;readonly=false"),
+    ("shared_root:/autofs/nccs-svm1_sw", "shared;fstype=dvs;readonly=true"),
+    ("shared_root:/lustre/orion", "shared;fstype=lustre;readonly=false"),
+    # Cray PE (MPICH, libfabric) and ROCm live in the node image's overlay
+    # mounts, which are node-local.  Declaring them lets their loader paths
+    # cross the env-none launch boundary; they are never written by ExaServe.
+    ("site_root:/opt/cray", "immutable_read_only_site;fstype=overlay;readonly=false"),
+    ("site_root:/opt/rocm-7.1.1", "immutable_read_only_site;fstype=overlay;readonly=false"),
+    (
+        f"site_root:{FRONTIER_SITE_RUNTIME_ROOT}",
+        "immutable_read_only_site;fstype=tmpfs;readonly=false",
+    ),
+)
 
 
 def frontier_model_storage_path() -> str:
@@ -162,16 +195,16 @@ def frontier_model_storage_path() -> str:
 
 
 def frontier_site_profile() -> SiteProfile:
-    """SCAFFOLD SiteProfile for OLCF Frontier (Slurm + ROCm + vLLM, MI250X).
+    """Unqualified SiteProfile for OLCF Frontier (Slurm + ROCm + vLLM, MI250X).
 
-    Nothing here is qualified.  ``scale_envelopes`` is empty on purpose, so every
-    plan compiled against this profile gets the explicit unqualified generic
-    envelope and cannot cross the production execution boundary.
-    ``environment_profile_ref`` is empty until a ROCm CompatibilityProfile
-    exists (``compat.profile.default_profile`` is still the Aurora XPU stack).
-    Follow ``doc/deploy_slurm_amd.md`` to qualify; do not add envelopes or
-    ``evidence_backed`` limits without the corresponding measurements.
+    ``scale_envelopes`` is empty on purpose, so every plan compiled against
+    this profile must set ``validation_mode: true`` and gets the explicit
+    unqualified generic envelope; it cannot cross the production execution
+    boundary.  Follow ``docs/deploy_slurm_amd.md`` to qualify; do not add
+    envelopes or ``evidence_backed`` limits without the measurements.
     """
+    from .compat.profile import default_profile
+
     max_nodes = int(os.environ.get("EXASERVE_SITE_MAX_NODES", "64"))
     return SiteProfile(
         schema_version=SCHEMA_VERSION,
@@ -179,22 +212,27 @@ def frontier_site_profile() -> SiteProfile:
         max_nodes=max_nodes,
         # 4 MI250X per node, each exposing 2 GCDs; a replica owns GCDs.
         gpus_per_node=int(os.environ.get("EXASERVE_SITE_GPUS_PER_NODE", "8")),
-        cpus_per_node=int(os.environ.get("EXASERVE_SITE_CPUS_PER_NODE", "64")),
+        # 64 cores per node, 8 reserved by the low-noise mode: 56 schedulable.
+        cpus_per_node=int(os.environ.get("EXASERVE_SITE_CPUS_PER_NODE", "56")),
         scheduler_types=("slurm",),
         gateway_kinds=("haproxy", "litellm", "nginx", "envoy", "pingora"),
         vendors=("rocm",),
         engines=("vllm",),
         model_storage_path=frontier_model_storage_path(),
-        local_stage_path=os.environ.get("EXASERVE_LOCAL_STAGE_PATH", "/tmp/hf_home"),
+        local_stage_path=os.environ.get(
+            "EXASERVE_LOCAL_STAGE_PATH", f"/mnt/bb/{local_account_name()}/exaserve"
+        ),
         control=ControlLimits(),  # evidence_backed=False by construction
         readiness=ReadinessLimits(),
         launcher_capabilities=("srun", "slurm", "ray_serve.run_many"),
-        filesystem_semantics=(("shared", "lustre"), ("local_stage", "node_local")),
+        filesystem_semantics=_FRONTIER_FILESYSTEM_SEMANTICS,
         accelerator_inventory=("mi250x",),
         network_boundary="trusted_allocation",
-        environment_profile_ref="",
+        environment_profile_ref=default_profile("rocm").profile_id,
         prepared_environment=_FRONTIER_PREPARED_ENVIRONMENT,
-        environment_unset=(),
+        # Ray's AMD accelerator manager owns HIP_VISIBLE_DEVICES and rejects a
+        # conflicting ROCr mask; neither may leak in from the submitting shell.
+        environment_unset=("CUDA_VISIBLE_DEVICES", "HIP_VISIBLE_DEVICES", "ROCR_VISIBLE_DEVICES"),
         stack_size_kb=8192,
         scale_envelopes=(),
     ).finalize()
@@ -533,9 +571,10 @@ def qualify_declared_shared_filesystems(profile: SiteProfile) -> tuple[dict[str,
 # Site-specific hostnames that name a node's high-speed-network interface.  A
 # template is tried before the plain node name; ``{short}`` is the node name up
 # to its first dot.  Sites absent from this table use the node name unchanged.
-# Frontier's Slingshot (``hsn0``) and Perlmutter's names are not recorded here
-# until confirmed on those machines; an unconfirmed guess would silently bind
-# Ray to the wrong interface.
+# Frontier needs no template: a compute node's plain hostname already resolves
+# to its ``hsn0`` Slingshot address (``frontierNNNNN-hsn0`` is an alias of the
+# same record; confirmed in probe job 5919005).  Perlmutter's names are not
+# recorded until confirmed; a guess would silently bind Ray to the wrong NIC.
 _HSN_HOST_TEMPLATES: dict[str, tuple[str, ...]] = {
     AURORA_SITE_ID: ("{short}.hsn.cm.aurora.alcf.anl.gov",),
 }

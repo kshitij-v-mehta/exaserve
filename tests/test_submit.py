@@ -69,10 +69,11 @@ def test_job_site_setup_has_no_module_fallback(monkeypatch):
     from exaserve.submit import _default_env_setup
 
     monkeypatch.delenv("EXASERVE_ENV_SCRIPT_AURORA")
+    monkeypatch.delenv("EXASERVE_ENV_SCRIPT", raising=False)
     with pytest.raises(ValueError) as excinfo:
         _default_env_setup()
     message = str(excinfo.value)
-    assert message.startswith("EXASERVE_ENV_SCRIPT_AURORA is not set")
+    assert message.startswith("EXASERVE_ENV_SCRIPT is not set")
     assert "absolute path of the site environment script that the job sources" in message
     assert "'Prepare the runtime' in docs/getting_started.md" in message
     assert "module load" not in message
@@ -412,6 +413,7 @@ def test_submit_refuses_a_bad_site_script_before_writing_anything(
     _write_config(config_path)
     scheduler = _FakeScheduler()
     monkeypatch.setattr("exaserve.submit.get_scheduler", lambda _name=None: scheduler)
+    monkeypatch.delenv("EXASERVE_ENV_SCRIPT", raising=False)
     if configured is None:
         monkeypatch.delenv("EXASERVE_ENV_SCRIPT_AURORA")
     elif configured == "missing":
@@ -420,7 +422,7 @@ def test_submit_refuses_a_bad_site_script_before_writing_anything(
         monkeypatch.setenv("EXASERVE_ENV_SCRIPT_AURORA", configured)
 
     log_dir = tmp_path / "logs"
-    with pytest.raises(ValueError, match="EXASERVE_ENV_SCRIPT_AURORA"):
+    with pytest.raises(ValueError, match="EXASERVE_ENV_SCRIPT"):
         submit_serve(config_path, log_dir=log_dir, dry_run=dry_run)
     assert not log_dir.exists()
     assert scheduler.submits == 0

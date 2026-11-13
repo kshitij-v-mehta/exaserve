@@ -1,0 +1,43 @@
+# --- Frontier (OLCF) validation deployment ---------------------------------
+# SmolLM2-360M-Instruct (LlamaForCausalLM) on MI250X GCDs behind HAProxy on the
+# allocation head.  Frontier is validation-only: the profile has no measured
+# scale envelope, so validation_mode must stay true (docs/deploy_frontier.md).
+#
+# Topology is num_nodes x num_gpus_per_node TP=1 replicas; edit those two
+# fields for 1 node x 1 GCD, 1 node x 8 GCDs, 2 nodes x 8 GCDs, ...
+#
+# Submit from a login node after preparing the stack (docs/deploy_frontier.md):
+#   source /path/to/frontier_submit.env
+#   exaserve-serve-submit examples/config.frontier.smollm2.yaml \
+#       --queue extended --qos debug --walltime 00:30:00 --project-account PROJECT
+
+validation_mode: true
+vendor: rocm
+ray_port: 6379
+node_cpus: 56
+num_nodes: 1
+num_gpus_per_node: 8
+model_storage_path: /lustre/orion/PROJECT/world-shared/USER/exaserve-frontier/models # ! Change this
+local_stage_path: /mnt/bb/USER/exaserve # ! node-local NVMe; requires --constraint=nvme
+deployment_name: exaserve_serve
+replica_max_ongoing_requests: 128
+models:
+    - model_id: HuggingFaceTB/SmolLM2-360M-Instruct
+      tensor_parallel_size: 1
+      pipeline_parallel_size: 1
+      max_model_len: 4096
+      size: 1
+      gpu_memory_utilization: 0.85
+      enforce_eager: true
+      max_num_seqs: 64
+
+gateway:
+  kind: haproxy
+  port: 4001
+  backend_port: 8000
+  worker_count: 1
+  options:
+    balance: leastconn
+    maxconn: 8000
+    check_interval: 5000
+    stats_port: 0

@@ -54,6 +54,9 @@ class SlurmScheduler(SchedulerBackend):
 
     def render_job(self, spec: JobSpec) -> str:
         part = f"#SBATCH --partition={spec.queue}\n" if spec.queue else ""
+        qos = f"#SBATCH --qos={spec.qos}\n" if spec.qos else ""
+        constraint = f"#SBATCH --constraint={spec.constraint}\n" if spec.constraint else ""
+        exclusive = "#SBATCH --exclusive\n" if spec.exclusive else ""
         gpn = f"#SBATCH --gpus-per-node={spec.gpus_per_node}\n" if spec.gpus_per_node else ""
         mail = (
             f"#SBATCH --mail-user={spec.mail_user}\n"
@@ -65,8 +68,8 @@ class SlurmScheduler(SchedulerBackend):
         header = (
             "#!/bin/bash -l\n"
             f"{identity}#SBATCH --job-name={spec.job_name}\n"
-            f"#SBATCH --account={spec.account}\n{part}"
-            f"#SBATCH --nodes={spec.num_nodes}\n"
+            f"#SBATCH --account={spec.account}\n{part}{qos}"
+            f"#SBATCH --nodes={spec.num_nodes}\n{constraint}{exclusive}"
             "#SBATCH --ntasks-per-node=1\n"
             f"{gpn}#SBATCH --time={spec.walltime}\n"
             f"#SBATCH --output={spec.stdout_dir}/%x-%j.out\n"
@@ -145,10 +148,56 @@ class SlurmScheduler(SchedulerBackend):
         *,
         user: Optional[str] = None,
     ) -> tuple[JobObservation, ...]:
-        raise NotImplementedError(
-            "Slurm exact reconciliation is not qualified: active-only squeue "
-            "search can miss an accepted job that already entered accounting"
+        """Find every job carrying ``run_identity`` as its job name.
+
+        Active jobs come from ``squeue``; jobs that already left the queue are
+        found through ``sacct`` accounting, so an accepted submission is not
+        missed after it started or finished.  An accounting failure is not
+        evidence of absence and raises instead of returning an empty match.
+        """
+        import getpass
+
+        owner = user or getpass.getuser()
+        found: set[str] = set()
+        active = run_cmd(
+            ["squeue", "-h", "-u", owner, "-n", run_identity, "-o", "%i|%j"],
+            self.status_timeout_s,
+            check=False,
         )
+        if active.returncode != 0:
+            raise RuntimeError(
+                active.stderr.strip() or "cannot reconcile Slurm submissions through squeue"
+            )
+        for line in active.stdout.splitlines():
+            job_id, _, name = line.strip().partition("|")
+            if job_id and name == run_identity:
+                found.add(job_id)
+        historical = run_cmd(
+            [
+                "sacct",
+                "-n",
+                "-X",
+                "-P",
+                "-u",
+                owner,
+                "--name",
+                run_identity,
+                "--starttime",
+                "now-7days",
+                "--format=JobIDRaw,JobName",
+            ],
+            self.status_timeout_s,
+            check=False,
+        )
+        if historical.returncode != 0:
+            raise RuntimeError(
+                historical.stderr.strip() or "cannot reconcile Slurm submissions through sacct"
+            )
+        for line in historical.stdout.splitlines():
+            job_id, _, name = line.strip().partition("|")
+            if job_id and name == run_identity:
+                found.add(job_id)
+        return tuple(self.observe(job_id) for job_id in sorted(found, key=int))
 
     def count_queued(self, user: str) -> Optional[dict[str, int]]:
         raw = self._squeue("-u", user, "-o", "%P|%t")

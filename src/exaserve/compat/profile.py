@@ -22,6 +22,12 @@ from .._version import __version__ as EXASERVE_VERSION
 
 SCHEMA_VERSION = 1
 AURORA_MPI4PY_VERSION = "4.1.1"
+# Frontier ROCm stack (scripts/frontier/): vLLM built from the v0.15.0 tag for
+# gfx90a against ROCm 7.1.1, which stamps the ``+rocm711`` local version.
+FRONTIER_ROCM_VLLM_VERSION = "0.15.0+rocm711"
+FRONTIER_ROCM_PROFILE_NAME = "olcf-frontier-rocm711"
+# Patches that adapt Intel XPU channel selection and device visibility only.
+_XPU_ONLY_PATCH_IDS = frozenset({"SC-09", "SC-10", "SC-11", "SC-12"})
 _SHA256 = re.compile(r"^[0-9a-f]{64}$")
 
 # Compatibility gates are part of the hash-bearing profile contract. Keep
@@ -694,10 +700,20 @@ def observed_versions() -> dict[str, str]:
 
 @lru_cache(maxsize=4)
 def default_profile(vendor: str = "xpu") -> CompatibilityProfile:
-    """The Aurora frameworks 2025.3.1 profile (ADR-003 selected set).
+    """The compatibility profile for ``vendor`` (ADR-003 selected set).
+
+    ``xpu`` (and any vendor without its own stack) is the Aurora frameworks
+    2025.3.1 profile.  ``rocm`` is the Frontier stack built from the same
+    upstream sources: vLLM v0.15.0 and Ray 2.53.0, whose patched Python files
+    are byte-identical to Aurora's (verified against the v0.15.0 tag and the
+    PyPI Ray wheel), so every vendor-neutral patch carries the same source
+    hashes.  Only the vLLM local version differs, and the XPU-only patches
+    (SC-09..SC-12) are not selected.
 
     Patch ids mirror ``docs/hardening/COMPATIBILITY_INVENTORY.md``.
     """
+    rocm = vendor == "rocm"
+    vllm_version = FRONTIER_ROCM_VLLM_VERSION if rocm else "0.15.0+xpu"
     package_dir = Path(__file__).resolve().parents[1]
 
     def _hash_file(path: Path) -> str:
@@ -723,61 +739,61 @@ def default_profile(vendor: str = "xpu") -> CompatibilityProfile:
         "SC-01": (
             "vllm",
             "vllm/config/vllm.py",
-            "0.15.0+xpu",
+            vllm_version,
             "940f2c526bbd3f1b7885d836c84388db88d30df54f20212c1c4a3e0da9bcf46a",
         ),
         "SC-02": (
             "vllm",
             "vllm/v1/worker/utils.py",
-            "0.15.0+xpu",
+            vllm_version,
             "38ad72193886062cc787474ae8ee2b1066e53e938716cfd56dca52fc58fe0a37",
         ),
         "SC-03": (
             "vllm",
             "vllm/forward_context.py",
-            "0.15.0+xpu",
+            vllm_version,
             "2d6d7d5bc92f44602432633c9d034731157b5c0db3aa2827e4c8714032d53bdb",
         ),
         "SC-04": (
             "vllm",
             "vllm/attention/layer.py",
-            "0.15.0+xpu",
+            vllm_version,
             "74f359628f762892ab9b28fc6b8d86ba1d04df1d3e4dbe957ee5a3c6cd290086",
         ),
         "SC-05": (
             "vllm",
             "vllm/v1/worker/gpu_model_runner.py",
-            "0.15.0+xpu",
+            vllm_version,
             "e8a73e1ccbfff37b880cd47ba9c115db572aef3c9d4d9eee50b18b729117f9bb",
         ),
         "SC-09": (
             "vllm",
             "vllm/v1/executor/ray_executor.py",
-            "0.15.0+xpu",
+            vllm_version,
             "7576bec19a3e686c0fef8b2e3d8380d6dcbe09fe72a8d20569a5e86687206a0f",
         ),
         "SC-10": (
             "vllm",
             "vllm/v1/executor/ray_executor.py",
-            "0.15.0+xpu",
+            vllm_version,
             "7576bec19a3e686c0fef8b2e3d8380d6dcbe09fe72a8d20569a5e86687206a0f",
         ),
         "EW-01": (
             "vllm",
             "vllm/v1/executor/ray_executor.py",
-            "0.15.0+xpu",
+            vllm_version,
             "7576bec19a3e686c0fef8b2e3d8380d6dcbe09fe72a8d20569a5e86687206a0f",
         ),
         "EW-02": (
             "vllm",
             "vllm/v1/executor/multiproc_executor.py",
-            "0.15.0+xpu",
+            vllm_version,
             "ea3d0115c1af30d75f3e44c604f413cd88fb6071fd1a3e1da46cbe043fd2c26c",
         ),
         "EW-03": (
             "vllm",
             "vllm/v1/executor/ray_utils.py",
-            "0.15.0+xpu",
+            vllm_version,
             "04c2b93ef48b60f5461868f805458df5b4e3ef4b867ba6685c3073ef0d7db9cd",
         ),
         "SC-11": (
@@ -1073,6 +1089,8 @@ def default_profile(vendor: str = "xpu") -> CompatibilityProfile:
             removal_ref="remove-when-engine-offers-pre-import-hook",
         ),
     )
+    if rocm:
+        patches = tuple(p for p in patches if p.patch_id not in _XPU_ONLY_PATCH_IDS)
     modelinfo_support_sources = (
         VLLMModelInfoSupportSourceSpec(
             target_file="vllm/envs.py",
@@ -1127,10 +1145,10 @@ def default_profile(vendor: str = "xpu") -> CompatibilityProfile:
     # live discovery only after the profile has been selected and activated.
     profile = CompatibilityProfile(
         schema_version=SCHEMA_VERSION,
-        name=f"aurora-frameworks-2025.3.1-{vendor}",
+        name=(FRONTIER_ROCM_PROFILE_NAME if rocm else f"aurora-frameworks-2025.3.1-{vendor}"),
         python="3.12.12",
         ray="2.53.0",
-        vllm="0.15.0+xpu",
+        vllm=vllm_version,
         vendor=vendor,
         patches=patches,
         mpi4py=AURORA_MPI4PY_VERSION,

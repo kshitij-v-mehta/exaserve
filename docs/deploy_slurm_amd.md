@@ -34,6 +34,9 @@ historical tests as evidence. Do not add the platform to a release support
 matrix until the new profile is reviewed and its measured limits are marked
 evidence-backed.
 
+The OLCF Frontier bring-up (`olcf-frontier`, validation only) is described in
+[`deploy_frontier.md`](deploy_frontier.md).
+
 The implemented seams are described in
 [`design/scheduler_abstraction.md`](design/scheduler_abstraction.md) and
 [`design/vendor_site_abstraction.md`](design/vendor_site_abstraction.md).

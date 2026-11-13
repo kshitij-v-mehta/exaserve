@@ -202,6 +202,14 @@ class VLLMEngine(EngineBackend):
         # ---- Device isolation (delegated to the vendor layer) ---------------
         t0 = time.monotonic()
         self._vendor.isolate_devices(gpu_ids, "vllm")
+        triton_cache = os.environ.get("TRITON_CACHE_DIR", "")
+        if getattr(self._vendor, "per_device_compile_cache", False) and gpu_ids and triton_cache:
+            # Spawned EngineCore/worker processes inherit this before importing
+            # Triton.  The parent is the canonical node-local rank cache, so the
+            # child directory stays inside the same owned runtime tree.
+            os.environ["TRITON_CACHE_DIR"] = os.path.join(
+                triton_cache, "devices-" + "-".join(str(g) for g in gpu_ids)
+            )
         if gpu_ids:
             print(
                 f"[VLLMEngine pid={pid}] vendor={self._vendor.name} assigned devices {gpu_ids}",

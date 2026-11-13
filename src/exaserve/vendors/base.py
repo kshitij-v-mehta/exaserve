@@ -9,7 +9,7 @@ engine ``create()`` methods:
 - **Device isolation** — which env var pins a replica to its GPU/tile(s):
   Intel XPU ``ZE_AFFINITY_MASK`` (the Aurora profile forbids
   ``ONEAPI_DEVICE_SELECTOR``),
-  NVIDIA ``CUDA_VISIBLE_DEVICES``, AMD ``ROCR_VISIBLE_DEVICES``.
+  NVIDIA ``CUDA_VISIBLE_DEVICES``, AMD ``HIP_VISIBLE_DEVICES``.
 - **PyTorch device string** — ``xpu`` vs ``cuda`` (ROCm also uses ``cuda``).
 - **Vendor env defaults** and **distributed/PP workarounds** (the XPU
   compiled-DAG env lives here, gated to XPU so it never leaks to CUDA/ROCm).
@@ -33,6 +33,13 @@ class VendorBackend(ABC):
 
     #: registry key, e.g. "xpu"
     name: str = "base"
+
+    #: Give each replica's device set its own Triton kernel cache below the
+    #: rank's node-local cache.  Triton does not support concurrent writers
+    #: in one cache directory, and replicas sharing a node compile the same
+    #: kernels at the same time during start-up (observed on Frontier with
+    #: 8 replicas per node).  Off by default so validated stacks are unchanged.
+    per_device_compile_cache: bool = False
 
     # ---- device isolation ----------------------------------------------------
 
