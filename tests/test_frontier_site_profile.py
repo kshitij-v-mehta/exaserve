@@ -467,3 +467,28 @@ def test_slurm_export_never_mixes_none_with_variables():
     prefix = resolve_launch_prefix(2, scheduler="slurm", application_env_names=("PYTHONPATH",))
     assert "--export=PYTHONPATH" in prefix
     assert not any(item.startswith("--export=NONE,") for item in prefix)
+
+
+def test_rocm_modelinfo_manifest_differs_only_in_vllm_version():
+    import hashlib
+    import json
+    from pathlib import Path
+
+    import exaserve
+    from exaserve.compat.profile import default_profile
+    from exaserve.vllm_modelinfo_seed import _load_bundle, profile_manifest_filename
+
+    resources = Path(exaserve.__file__).parent / "resources" / "vllm_modelinfo"
+    xpu = json.loads((resources / "manifest.json").read_text())
+    rocm_bytes = (resources / "manifest.rocm711.json").read_bytes()
+    rocm = json.loads(rocm_bytes)
+    assert {**xpu, "vllm_version": rocm["vllm_version"]} == rocm
+    profile = default_profile("rocm")
+    assert hashlib.sha256(rocm_bytes).hexdigest() == profile.vllm_modelinfo_seed_manifest_hash
+    bundle = _load_bundle(
+        resources,
+        expected_manifest_sha256=profile.vllm_modelinfo_seed_manifest_hash,
+        manifest_filename=profile_manifest_filename(profile),
+    )
+    assert bundle.vllm_version == profile.vllm == "0.15.0+rocm711"
+    assert profile_manifest_filename(default_profile("xpu")) == "manifest.json"

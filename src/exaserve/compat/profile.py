@@ -1152,9 +1152,15 @@ def default_profile(vendor: str = "xpu") -> CompatibilityProfile:
         vendor=vendor,
         patches=patches,
         mpi4py=AURORA_MPI4PY_VERSION,
-        vllm_modelinfo_seed_manifest_path=("exaserve/resources/vllm_modelinfo/manifest.json"),
+        vllm_modelinfo_seed_manifest_path=(
+            "exaserve/resources/vllm_modelinfo/manifest.rocm711.json"
+            if rocm
+            else "exaserve/resources/vllm_modelinfo/manifest.json"
+        ),
         vllm_modelinfo_seed_manifest_hash=(
-            "c5e82475960ee3094a19cbda25b25264cbecde472ef9f34adedf59380b73d18c"
+            "68990bce55da0c05307b2cbfb6aee40bbdfe4b3e61d95819462879118009aab9"
+            if rocm
+            else "c5e82475960ee3094a19cbda25b25264cbecde472ef9f34adedf59380b73d18c"
         ),
         vllm_modelinfo_installer_path="exaserve/vllm_modelinfo_seed.py",
         vllm_modelinfo_installer_hash=_hash_file(package_dir / "vllm_modelinfo_seed.py"),

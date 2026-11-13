@@ -46,6 +46,32 @@ from .state.atomic import (
 PATCH_ID = "VC-01"
 CAPABILITY = "vllm_modelinfo_cache_seed"
 MANIFEST_RELATIVE_PATH = Path("exaserve/resources/vllm_modelinfo/manifest.json")
+# One manifest per vLLM build label.  The seed records depend only on vLLM
+# source bytes, which are identical for Aurora's v0.15.0+xpu and Frontier's
+# v0.15.0+rocm711 builds; each manifest binds them to one exact version.
+ROCM711_MANIFEST_RELATIVE_PATH = Path("exaserve/resources/vllm_modelinfo/manifest.rocm711.json")
+SUPPORTED_MANIFEST_RELATIVE_PATHS = frozenset(
+    path.as_posix() for path in (MANIFEST_RELATIVE_PATH, ROCM711_MANIFEST_RELATIVE_PATH)
+)
+
+
+def _manifest_name(value: str) -> str:
+    candidate = (MANIFEST_RELATIVE_PATH.parent / str(value)).as_posix()
+    if candidate not in SUPPORTED_MANIFEST_RELATIVE_PATHS:
+        raise VLLMModelInfoSeedError(f"unsupported vLLM model-info seed manifest {value!r}")
+    return str(value)
+
+
+def profile_manifest_filename(profile: CompatibilityProfile) -> str:
+    """The manifest file name a CompatibilityProfile binds (path checked)."""
+
+    if profile.vllm_modelinfo_seed_manifest_path not in SUPPORTED_MANIFEST_RELATIVE_PATHS:
+        raise VLLMModelInfoSeedError(
+            "CompatibilityProfile names an unsupported model-info manifest path"
+        )
+    return Path(profile.vllm_modelinfo_seed_manifest_path).name
+
+
 EXPECTED_MANIFEST_SHA256 = "c5e82475960ee3094a19cbda25b25264cbecde472ef9f34adedf59380b73d18c"
 NOT_REQUIRED_INSTALL_REPORT_HASH = hashlib.sha256(
     b'{"required":false,"schema_version":1}'
@@ -364,9 +390,10 @@ def _load_bundle(
     resource_root: Path,
     *,
     expected_manifest_sha256: str = EXPECTED_MANIFEST_SHA256,
+    manifest_filename: str = MANIFEST_RELATIVE_PATH.name,
 ) -> ModelInfoSeedBundle:
     manifest_path = _contained_file(
-        resource_root / "manifest.json",
+        resource_root / _manifest_name(manifest_filename),
         resource_root,
         label="vLLM model-info seed manifest",
     )
@@ -497,16 +524,18 @@ def _validated_inputs(
     expected_support_sources: tuple[VLLMModelInfoSupportSourceSpec, ...] | None,
     expected_seeds: tuple[VLLMModelInfoSeedSpec, ...] | None,
     distribution: Any | None,
+    manifest_filename: str = MANIFEST_RELATIVE_PATH.name,
 ) -> tuple[ModelInfoSeedBundle, tuple[tuple[VLLMModelInfoSeedSpec, bytes], ...]]:
     resource_root = capsule_python_root / MANIFEST_RELATIVE_PATH.parent
     _contained_file(
-        resource_root / "manifest.json",
+        resource_root / _manifest_name(manifest_filename),
         capsule_python_root,
         label="vLLM model-info seed manifest",
     )
     bundle = _load_bundle(
         resource_root,
         expected_manifest_sha256=expected_manifest_sha256,
+        manifest_filename=manifest_filename,
     )
     if expected_vllm_version is not None and bundle.vllm_version != expected_vllm_version:
         raise VLLMModelInfoSeedError(
@@ -576,7 +605,7 @@ def validate_profile_seed_bundle(
 ) -> ModelInfoSeedBundle:
     """Verify the profile, manifest, seeds, and exact installed vLLM sources."""
 
-    if profile.vllm_modelinfo_seed_manifest_path != MANIFEST_RELATIVE_PATH.as_posix():
+    if profile.vllm_modelinfo_seed_manifest_path not in SUPPORTED_MANIFEST_RELATIVE_PATHS:
         raise VLLMModelInfoSeedError(
             "CompatibilityProfile names an unsupported model-info manifest path"
         )
@@ -603,6 +632,7 @@ def validate_profile_seed_bundle(
         expected_support_sources=profile.vllm_modelinfo_support_sources,
         expected_seeds=profile.vllm_modelinfo_seeds,
         distribution=distribution,
+        manifest_filename=profile_manifest_filename(profile),
     )
     return bundle
 
@@ -636,6 +666,7 @@ def install_vllm_modelinfo_seeds(
     cache_root: str | os.PathLike[str],
     expected_vllm_version: str | None = None,
     expected_manifest_sha256: str = EXPECTED_MANIFEST_SHA256,
+    manifest_filename: str = MANIFEST_RELATIVE_PATH.name,
     expected_support_sources: tuple[VLLMModelInfoSupportSourceSpec, ...] | None = None,
     expected_seeds: tuple[VLLMModelInfoSeedSpec, ...] | None = None,
     distribution: Any | None = None,
@@ -659,6 +690,7 @@ def install_vllm_modelinfo_seeds(
         expected_support_sources=expected_support_sources,
         expected_seeds=expected_seeds,
         distribution=distribution,
+        manifest_filename=manifest_filename,
     )
     destination_root = _validated_cache_root(cache, state)
     created = []
@@ -699,6 +731,7 @@ def verify_vllm_modelinfo_seeds(
     cache_root: str | os.PathLike[str],
     expected_vllm_version: str | None = None,
     expected_manifest_sha256: str = EXPECTED_MANIFEST_SHA256,
+    manifest_filename: str = MANIFEST_RELATIVE_PATH.name,
     expected_support_sources: tuple[VLLMModelInfoSupportSourceSpec, ...] | None = None,
     expected_seeds: tuple[VLLMModelInfoSeedSpec, ...] | None = None,
     distribution: Any | None = None,
@@ -715,6 +748,7 @@ def verify_vllm_modelinfo_seeds(
         expected_support_sources=expected_support_sources,
         expected_seeds=expected_seeds,
         distribution=distribution,
+        manifest_filename=manifest_filename,
     )
     expected_cache = state / "cache" / "vllm"
     if os.path.normpath(cache) != os.path.normpath(expected_cache):
@@ -775,7 +809,7 @@ def install_from_environment(*, profile: CompatibilityProfile) -> ModelInfoSeedI
         raise VLLMModelInfoSeedError("VC-01 requires a real vLLM deployment")
     if not profile.vllm_modelinfo_seeds:
         raise VLLMModelInfoSeedError("CompatibilityProfile has no VC-01 seed contract")
-    if profile.vllm_modelinfo_seed_manifest_path != MANIFEST_RELATIVE_PATH.as_posix():
+    if profile.vllm_modelinfo_seed_manifest_path not in SUPPORTED_MANIFEST_RELATIVE_PATHS:
         raise VLLMModelInfoSeedError(
             "CompatibilityProfile names an unsupported model-info manifest path"
         )
@@ -786,6 +820,7 @@ def install_from_environment(*, profile: CompatibilityProfile) -> ModelInfoSeedI
         cache_root=cache,
         expected_vllm_version=profile.vllm,
         expected_manifest_sha256=profile.vllm_modelinfo_seed_manifest_hash,
+        manifest_filename=profile_manifest_filename(profile),
         expected_support_sources=profile.vllm_modelinfo_support_sources,
         expected_seeds=profile.vllm_modelinfo_seeds,
     )
@@ -801,6 +836,7 @@ def verify_from_environment(*, profile: CompatibilityProfile) -> bool:
         cache_root=cache,
         expected_vllm_version=profile.vllm,
         expected_manifest_sha256=profile.vllm_modelinfo_seed_manifest_hash,
+        manifest_filename=profile_manifest_filename(profile),
         expected_support_sources=profile.vllm_modelinfo_support_sources,
         expected_seeds=profile.vllm_modelinfo_seeds,
     )
@@ -810,6 +846,9 @@ __all__ = [
     "CAPABILITY",
     "EXPECTED_MANIFEST_SHA256",
     "MANIFEST_RELATIVE_PATH",
+    "ROCM711_MANIFEST_RELATIVE_PATH",
+    "SUPPORTED_MANIFEST_RELATIVE_PATHS",
+    "profile_manifest_filename",
     "NOT_REQUIRED_INSTALL_REPORT_HASH",
     "PATCH_ID",
     "SUPPORTED_ARCHITECTURES",

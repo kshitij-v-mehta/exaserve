@@ -1079,6 +1079,7 @@ def _compatibility_evidence(runtime_root: Path, *, state_root: Path | None) -> d
     from .vllm_modelinfo_seed import (
         expected_source_seed_evidence,
         install_vllm_modelinfo_seeds,
+        profile_manifest_filename,
         validate_profile_seed_bundle,
     )
 
@@ -1100,6 +1101,7 @@ def _compatibility_evidence(runtime_root: Path, *, state_root: Path | None) -> d
             cache_root=state_root / "cache" / "vllm",
             expected_vllm_version=profile.vllm,
             expected_manifest_sha256=profile.vllm_modelinfo_seed_manifest_hash,
+            manifest_filename=profile_manifest_filename(profile),
             expected_support_sources=profile.vllm_modelinfo_support_sources,
             expected_seeds=profile.vllm_modelinfo_seeds,
         )
