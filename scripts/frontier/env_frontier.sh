@@ -65,8 +65,11 @@ _es_stage_runtime() {
                 rm -rf -- "'"${EXASERVE_RUNTIME_PREFIX}"'"
             fi
             mkdir -p "$(dirname "'"${EXASERVE_RUNTIME_PREFIX}"'")"
-            tar -C / -I "zstd -T8" -xf "'"${archive_local}"'"
+            tar -C / -I zstd -xf "'"${archive_local}"'"
             rm -f -- "'"${archive_local}"'"
+            # The archive is read-only by construction; open only its root for
+            # the marker (the wheel step below re-seals the whole tree).
+            chmod u+w "'"${EXASERVE_RUNTIME_PREFIX}"'"
             echo "'"${digest}"'" > "'"${marker}"'"
         ' || return 3
     fi

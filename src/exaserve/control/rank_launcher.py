@@ -35,6 +35,19 @@ class RankLaunchError(RuntimeError):
 _ENV_NAME = re.compile(r"[A-Za-z_][A-Za-z0-9_]*")
 
 
+def slurm_export_argument(items) -> str:
+    """Render an env-none ``srun --export`` value for exactly ``items``.
+
+    An explicit list exports exactly the named variables (plus Slurm's own
+    step state) and nothing else from the caller.  ``NONE`` is used only for
+    an empty list: Slurm 26.05 on Frontier ignores every variable that follows
+    ``NONE,`` (``--export=NONE,A=1`` exports no ``A``), so mixing the two forms
+    silently starts ranks with an empty application environment.
+    """
+    items = list(items)
+    return ",".join(items) if items else "NONE"
+
+
 def resolve_launch_prefix(
     node_count: int,
     *,
@@ -68,8 +81,7 @@ def resolve_launch_prefix(
         raise RankLaunchError("application cwd must be an absolute path")
     if scheduler == "slurm":
         prefix = ["srun", f"--nodes={node_count}", "--ntasks-per-node=1", "--cpu-bind=none"]
-        exports = "NONE" + (f",{','.join(sorted(names))}" if names else "")
-        prefix.append(f"--export={exports}")
+        prefix.append(f"--export={slurm_export_argument(sorted(names))}")
         if application_cwd is not None:
             prefix.append(f"--chdir={application_cwd}")
         return prefix

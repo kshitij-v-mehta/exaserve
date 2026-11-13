@@ -17,6 +17,7 @@ from pathlib import Path
 from typing import Dict, List, Tuple
 
 from .control.finite_process import FiniteProcessError, run_finite
+from .control.rank_launcher import slurm_export_argument as _slurm_export_argument
 from .exception_notes import add_exception_note
 from .model_paths import get_model_storage_name, iter_unique_model_ids
 from .model_staging import (
@@ -588,8 +589,8 @@ def mpi_launch_prefix(
     ):
         raise ValueError("MPI application environment must contain safe string pairs")
     if scheduler == "slurm":
-        exports = ["NONE", *(f"{name}={value}" for name, value in sorted(environment.items()))]
-        if any("," in item for item in exports[1:]):
+        exports = [f"{name}={value}" for name, value in sorted(environment.items())]
+        if any("," in item for item in exports):
             raise ValueError("Slurm application environment values may not contain commas")
         # ``--overlap``: these finite steps run while the long-lived rank step
         # holds every CPU of the whole-node allocation; without it Slurm queues
@@ -604,7 +605,7 @@ def mpi_launch_prefix(
             "--cpu-bind=none",
             *(["--bcast=/tmp/"] if transfer_executable else []),
             f"--chdir={cwd}",
-            f"--export={','.join(exports)}",
+            f"--export={_slurm_export_argument(exports)}",
         ]
     if scheduler != "pbs":
         raise ValueError(f"unsupported model-broadcast scheduler {scheduler!r}")

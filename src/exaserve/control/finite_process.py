@@ -40,6 +40,11 @@ class FiniteProcessCancelled(FiniteProcessError):
         super().__init__(f"finite process cancelled: {argv[0]}")
 
 
+# Slurm's srun leaves a helper process in its group for a moment after the
+# step completes and srun itself exits (observed on Frontier, job 5919376).
+_LAUNCHER_DRAIN_GRACE_S = {"srun": 5.0}
+
+
 def _group_exists(pgid: int) -> bool:
     try:
         os.killpg(pgid, 0)
@@ -185,7 +190,14 @@ def run_finite(
 
     # communicate() cannot return while descendants still hold the captured
     # pipes, but a descendant may explicitly close them.  Such a daemon is a
-    # contract violation for finite work and is reaped here.
+    # contract violation for finite work and is reaped here.  A launcher that
+    # is known to reap its own short-lived helper after exiting gets a bounded
+    # drain window first; anything still alive after it is the same violation.
+    drain_s = _LAUNCHER_DRAIN_GRACE_S.get(os.path.basename(argv[0]), 0.0)
+    if drain_s and _group_exists(process.pid):
+        drain_deadline = time.monotonic() + drain_s
+        while time.monotonic() < drain_deadline and _group_exists(process.pid):
+            time.sleep(0.02)
     if _group_exists(process.pid):
         _stop_group(
             process.pid,

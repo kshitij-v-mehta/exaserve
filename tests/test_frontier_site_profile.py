@@ -415,7 +415,7 @@ def test_slurm_finite_steps_overlap_and_broadcast_their_executable():
     )
     assert prefix[:2] == ["srun", "--overlap"]
     assert "--bcast=/tmp/" in prefix
-    assert prefix[-1] == "--export=NONE,HOME=/tmp"
+    assert prefix[-1] == "--export=HOME=/tmp"
     plain = mpi_launch_prefix(2, scheduler="slurm", application_cwd="/tmp")
     assert not any(item.startswith("--bcast") for item in plain)
 
@@ -433,3 +433,37 @@ def test_rocm_vendor_isolates_with_hip_mask(monkeypatch):
     vendor.isolate_devices([])
     assert "HIP_VISIBLE_DEVICES" not in os.environ
     assert vendor.per_device_compile_cache is True
+
+
+def test_srun_helper_may_drain_but_lingering_daemons_still_fail(tmp_path, monkeypatch):
+    import sys
+
+    from exaserve.control import finite_process
+    from exaserve.control.finite_process import FiniteProcessError, run_finite
+
+    # A launcher named "srun" whose detached child exits shortly after it.
+    fake = tmp_path / "srun"
+    fake.write_text(
+        f"#!{sys.executable}\n"
+        "import os, sys, time\n"
+        "if os.fork() == 0:\n"
+        "    os.close(1); os.close(2)\n"
+        "    time.sleep(float(sys.argv[1]))\n"
+        "    os._exit(0)\n"
+    )
+    fake.chmod(0o755)
+    assert run_finite([str(fake), "0.3"], timeout_s=30).returncode == 0
+    monkeypatch.setitem(finite_process._LAUNCHER_DRAIN_GRACE_S, "srun", 0.2)
+    with pytest.raises(FiniteProcessError, match="left descendants"):
+        run_finite([str(fake), "5"], timeout_s=30, termination_grace_s=1.0)
+
+
+def test_slurm_export_never_mixes_none_with_variables():
+    from exaserve.control.rank_launcher import resolve_launch_prefix, slurm_export_argument
+
+    # Slurm 26.05 drops every variable after "NONE," (Frontier probe jobs).
+    assert slurm_export_argument([]) == "NONE"
+    assert slurm_export_argument(["A=1", "B"]) == "A=1,B"
+    prefix = resolve_launch_prefix(2, scheduler="slurm", application_env_names=("PYTHONPATH",))
+    assert "--export=PYTHONPATH" in prefix
+    assert not any(item.startswith("--export=NONE,") for item in prefix)
