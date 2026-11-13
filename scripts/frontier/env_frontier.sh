@@ -34,6 +34,11 @@ module load cray-mpich
 # No craype-accel module at run time: it enables GPU-aware MPICH, and ExaServe's
 # MPI helpers are not linked with the GTL library (GPU traffic uses RCCL).
 export MPICH_GPU_SUPPORT_ENABLED=0
+# Frontier's default NIC policy (NUMA) aborts MPI_Init unless every rank is
+# pinned to one NUMA domain.  ExaServe's staging helpers run one unpinned rank
+# per node (--cpu-bind=none) and only move files, so use the first NIC
+# (observed in 2-node test job 5919813).
+export MPICH_OFI_NIC_POLICY=BLOCK
 if [[ -n "${CRAY_LD_LIBRARY_PATH:-}" ]]; then
     export LD_LIBRARY_PATH="${CRAY_LD_LIBRARY_PATH}${LD_LIBRARY_PATH:+:${LD_LIBRARY_PATH}}"
 fi
