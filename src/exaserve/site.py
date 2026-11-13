@@ -33,6 +33,7 @@ from .plan.contracts import (
 )
 
 AURORA_SITE_ID = "alcf-aurora"
+FRONTIER_SITE_ID = "olcf-frontier"
 AURORA_PMIX_PREPARED_ENVIRONMENT = (
     ("PMIX_MCA_mca_base_component_path", "/usr/lib64/pmix"),
     ("PMIX_MCA_mca_base_param_files", "/etc/pmix-mca-params.conf"),
@@ -115,6 +116,89 @@ _AURORA_PREPARED_ENVIRONMENT = (
     ("RAY_EXPERIMENTAL_NOSET_ONEAPI_DEVICE_SELECTOR", "1"),
 )
 
+_AURORA_ONLY_PREPARED_NAMES = frozenset(
+    {
+        "CCL_PROCESS_LAUNCHER",
+        "RAY_EXPERIMENTAL_NOSET_ONEAPI_DEVICE_SELECTOR",
+        "ZE_AFFINITY_MASK",
+        "ZE_FLAT_DEVICE_HIERARCHY",
+        *(name for name, _ in AURORA_PMIX_PREPARED_ENVIRONMENT),
+    }
+)
+
+# Vendor- and site-neutral Ray/threading controls.  Derived from the Aurora
+# tuple (rather than the reverse) so the Aurora SiteProfile hash cannot drift.
+_COMMON_PREPARED_ENVIRONMENT = tuple(
+    item for item in _AURORA_PREPARED_ENVIRONMENT if item[0] not in _AURORA_ONLY_PREPARED_NAMES
+)
+
+# Frontier (ROCm) vendor/network environment.  Deliberately empty at scaffold
+# time: RCCL/libfabric (``NCCL_SOCKET_IFNAME``, ``FI_*``), HIP/ROCr visibility
+# and Ray's AMD accelerator-manager contract are bring-up findings, and a
+# guessed value here would become hash-bearing site fact.  Add entries only
+# with the one-node evidence that justifies them.
+_FRONTIER_PREPARED_ENVIRONMENT = _COMMON_PREPARED_ENVIRONMENT
+
+
+def frontier_model_storage_path() -> str:
+    """Account-local model path on OLCF Orion.
+
+    Unlike Aurora there is no safe built-in project default: Orion paths are
+    ``/lustre/orion/<project>/...`` and the project is the caller's.
+    """
+
+    explicit = os.environ.get("EXASERVE_MODEL_STORAGE_PATH")
+    if explicit:
+        return explicit
+    root = os.environ.get("EXASERVE_PROJECT_ROOT", "")
+    if not root:
+        raise RuntimeError(
+            "Frontier has no default model path; set EXASERVE_MODEL_STORAGE_PATH "
+            "or EXASERVE_PROJECT_ROOT (for example /lustre/orion/<project>/proj-shared)"
+        )
+    if not Path(root).is_absolute():
+        raise RuntimeError("EXASERVE_PROJECT_ROOT must be an absolute path")
+    return str(Path(root) / local_account_name() / "models")
+
+
+def frontier_site_profile() -> SiteProfile:
+    """SCAFFOLD SiteProfile for OLCF Frontier (Slurm + ROCm + vLLM, MI250X).
+
+    Nothing here is qualified.  ``scale_envelopes`` is empty on purpose, so every
+    plan compiled against this profile gets the explicit unqualified generic
+    envelope and cannot cross the production execution boundary.
+    ``environment_profile_ref`` is empty until a ROCm CompatibilityProfile
+    exists (``compat.profile.default_profile`` is still the Aurora XPU stack).
+    Follow ``doc/deploy_slurm_amd.md`` to qualify; do not add envelopes or
+    ``evidence_backed`` limits without the corresponding measurements.
+    """
+    max_nodes = int(os.environ.get("EXASERVE_SITE_MAX_NODES", "64"))
+    return SiteProfile(
+        schema_version=SCHEMA_VERSION,
+        site_id=FRONTIER_SITE_ID,
+        max_nodes=max_nodes,
+        # 4 MI250X per node, each exposing 2 GCDs; a replica owns GCDs.
+        gpus_per_node=int(os.environ.get("EXASERVE_SITE_GPUS_PER_NODE", "8")),
+        cpus_per_node=int(os.environ.get("EXASERVE_SITE_CPUS_PER_NODE", "64")),
+        scheduler_types=("slurm",),
+        gateway_kinds=("haproxy", "litellm", "nginx", "envoy", "pingora"),
+        vendors=("rocm",),
+        engines=("vllm",),
+        model_storage_path=frontier_model_storage_path(),
+        local_stage_path=os.environ.get("EXASERVE_LOCAL_STAGE_PATH", "/tmp/hf_home"),
+        control=ControlLimits(),  # evidence_backed=False by construction
+        readiness=ReadinessLimits(),
+        launcher_capabilities=("srun", "slurm", "ray_serve.run_many"),
+        filesystem_semantics=(("shared", "lustre"), ("local_stage", "node_local")),
+        accelerator_inventory=("mi250x",),
+        network_boundary="trusted_allocation",
+        environment_profile_ref="",
+        prepared_environment=_FRONTIER_PREPARED_ENVIRONMENT,
+        environment_unset=(),
+        stack_size_kb=8192,
+        scale_envelopes=(),
+    ).finalize()
+
 
 @lru_cache(maxsize=4)
 def default_site_profile(site_id: str = "", fallback_model_storage_path: str = "") -> SiteProfile:
@@ -129,6 +213,8 @@ def default_site_profile(site_id: str = "", fallback_model_storage_path: str = "
     points pass none and fail closed.
     """
     site_id = site_id or os.environ.get("EXASERVE_SITE_ID", AURORA_SITE_ID)
+    if site_id == FRONTIER_SITE_ID:
+        return frontier_site_profile()
     from .compat.profile import default_profile
 
     # ``max_nodes`` is the physical/validation ceiling, not a production
