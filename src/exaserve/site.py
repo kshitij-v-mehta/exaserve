@@ -530,6 +530,35 @@ def qualify_declared_shared_filesystems(profile: SiteProfile) -> tuple[dict[str,
     return tuple(evidence)
 
 
+# Site-specific hostnames that name a node's high-speed-network interface.  A
+# template is tried before the plain node name; ``{short}`` is the node name up
+# to its first dot.  Sites absent from this table use the node name unchanged.
+# Frontier's Slingshot (``hsn0``) and Perlmutter's names are not recorded here
+# until confirmed on those machines; an unconfirmed guess would silently bind
+# Ray to the wrong interface.
+_HSN_HOST_TEMPLATES: dict[str, tuple[str, ...]] = {
+    AURORA_SITE_ID: ("{short}.hsn.cm.aurora.alcf.anl.gov",),
+}
+
+
+def node_address_candidates(node: str, *, site_id: str) -> tuple[str, ...]:
+    """Hostnames to try, in order, when resolving ``node`` on ``site_id``."""
+    short = node.split(".", 1)[0]
+    templates = _HSN_HOST_TEMPLATES.get(site_id, ())
+    return tuple(dict.fromkeys([t.format(short=short) for t in templates] + [node]))
+
+
+def resolve_local_node_address(*, site_id: str) -> str:
+    """Resolve this host's address on the site's preferred interface."""
+    hostname = socket.gethostname()
+    for candidate in node_address_candidates(hostname, site_id=site_id):
+        try:
+            return socket.gethostbyname(candidate)
+        except OSError:
+            continue
+    raise RuntimeError(f"could not resolve allocated node {hostname!r}")
+
+
 def resolve_allocation_node_address(node: str, *, site_id: str) -> str:
     """Resolve one bound allocation node to a non-loopback IPv4 address.
 
@@ -540,13 +569,8 @@ def resolve_allocation_node_address(node: str, *, site_id: str) -> str:
     if not isinstance(node, str) or not node.strip():
         raise RuntimeError("allocation binding contains an empty node name")
     node = node.strip()
-    candidates = [node]
-    if site_id == AURORA_SITE_ID:
-        short = node.split(".", 1)[0]
-        hsn = f"{short}.hsn.cm.aurora.alcf.anl.gov"
-        candidates = [hsn, node]
     errors = []
-    for candidate in dict.fromkeys(candidates):
+    for candidate in node_address_candidates(node, site_id=site_id):
         try:
             infos = socket.getaddrinfo(
                 candidate, None, family=socket.AF_INET, type=socket.SOCK_STREAM

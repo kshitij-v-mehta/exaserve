@@ -9,7 +9,6 @@ from __future__ import annotations
 
 import os
 import ipaddress
-import socket
 import sys
 from dataclasses import dataclass
 
@@ -127,21 +126,17 @@ def _startup_limit(cluster: RayClusterConfig) -> int:
     return min(cluster.node_cpus, limit)
 
 
-def _local_hsn_ip() -> str:
-    hostname = socket.gethostname()
-    for candidate in (f"{hostname}.hsn.cm.aurora.alcf.anl.gov", hostname):
-        try:
-            return socket.gethostbyname(candidate)
-        except OSError:
-            continue
-    raise RuntimeError(f"could not resolve allocated node {hostname!r}")
+def _local_hsn_ip(site_id: str) -> str:
+    from ..site import resolve_local_node_address
+
+    return resolve_local_node_address(site_id=site_id)
 
 
-def ray_node_ip(cluster: RayClusterConfig, rank: int) -> str:
+def ray_node_ip(cluster: RayClusterConfig, rank: int, *, site_id: str) -> str:
     """Resolve the one address shared by a rank's Ray and vLLM children."""
     if isinstance(rank, bool) or not isinstance(rank, int) or rank < 0:
         raise ValueError(f"Ray rank must be a non-negative integer, got {rank!r}")
-    return cluster.head_ip if rank == 0 else _local_hsn_ip()
+    return cluster.head_ip if rank == 0 else _local_hsn_ip(site_id)
 
 
 def ray_head_argv(cluster: RayClusterConfig, num_gpus: int) -> list[str]:
@@ -163,11 +158,8 @@ def ray_head_argv(cluster: RayClusterConfig, num_gpus: int) -> list[str]:
     ]
 
 
-def ray_worker_argv(
-    cluster: RayClusterConfig, num_gpus: int, worker_ip: str | None = None
-) -> list[str]:
+def ray_worker_argv(cluster: RayClusterConfig, num_gpus: int, worker_ip: str) -> list[str]:
     limit = _startup_limit(cluster)
-    worker_ip = worker_ip or _local_hsn_ip()
     return [
         _python_executable(),
         "-m",

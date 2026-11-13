@@ -186,3 +186,93 @@ def test_frontier_node_ceiling_is_enforced(monkeypatch):
     site = frontier_site_profile()
     with pytest.raises(PlanError, match="exceeds site"):
         compile_deployment_plan(_raw(num_nodes=5), site=site, deployment_id="x")
+
+
+# -- per-site address resolution and queue defaults --------------------------
+
+
+def test_aurora_hsn_hostnames_are_scoped_to_aurora():
+    from exaserve.site import node_address_candidates
+
+    assert node_address_candidates("x4000c0s1b0n0.hostmgmt.cm", site_id=AURORA_SITE_ID) == (
+        "x4000c0s1b0n0.hsn.cm.aurora.alcf.anl.gov",
+        "x4000c0s1b0n0.hostmgmt.cm",
+    )
+    assert node_address_candidates("frontier00123", site_id=FRONTIER_SITE_ID) == (
+        "frontier00123",
+    )
+    assert node_address_candidates("nid001234", site_id="nersc-perlmutter") == ("nid001234",)
+
+
+def test_resolution_uses_only_the_requested_sites_candidates(monkeypatch):
+    import socket
+
+    from exaserve.site import resolve_allocation_node_address, resolve_local_node_address
+
+    asked = []
+
+    def fake_getaddrinfo(host, *_a, **_k):
+        asked.append(host)
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.1.2.3", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    assert resolve_allocation_node_address("frontier00123", site_id=FRONTIER_SITE_ID) == "10.1.2.3"
+    assert asked == ["frontier00123"]
+
+    asked.clear()
+    resolve_allocation_node_address("x4000c0s1b0n0", site_id=AURORA_SITE_ID)
+    assert asked == ["x4000c0s1b0n0.hsn.cm.aurora.alcf.anl.gov"]
+
+    names = []
+    monkeypatch.setattr(socket, "gethostname", lambda: "frontier00124")
+    monkeypatch.setattr(socket, "gethostbyname", lambda h: names.append(h) or "10.9.9.9")
+    assert resolve_local_node_address(site_id=FRONTIER_SITE_ID) == "10.9.9.9"
+    assert names == ["frontier00124"]
+
+
+def test_aurora_resolution_falls_back_to_plain_name(monkeypatch):
+    import socket
+
+    from exaserve.site import resolve_allocation_node_address
+
+    def fake_getaddrinfo(host, *_a, **_k):
+        if "hsn" in host:
+            raise OSError("nxdomain")
+        return [(socket.AF_INET, socket.SOCK_STREAM, 6, "", ("10.5.5.5", 0))]
+
+    monkeypatch.setattr(socket, "getaddrinfo", fake_getaddrinfo)
+    assert resolve_allocation_node_address("x1", site_id=AURORA_SITE_ID) == "10.5.5.5"
+
+
+def test_ray_node_ip_resolves_workers_for_the_given_site(monkeypatch):
+    from exaserve.control import ray_runtime
+
+    seen = []
+    monkeypatch.setattr(ray_runtime, "_local_hsn_ip", lambda site_id: seen.append(site_id) or "10.0.0.7")
+    cluster = ray_runtime.RayClusterConfig(head_ip="10.0.0.1", port=6379, node_cpus=64)
+    assert ray_runtime.ray_node_ip(cluster, 0, site_id=FRONTIER_SITE_ID) == "10.0.0.1"
+    assert ray_runtime.ray_node_ip(cluster, 3, site_id=FRONTIER_SITE_ID) == "10.0.0.7"
+    assert seen == [FRONTIER_SITE_ID]
+
+
+def test_queue_defaults_are_site_keyed_and_fail_closed():
+    from exaserve.schedulers import default_queue_and_walltime
+
+    assert default_queue_and_walltime(1, site_id=AURORA_SITE_ID) == ("capacity", "01:00:00")
+    assert default_queue_and_walltime(256, site_id=AURORA_SITE_ID) == ("prod", "02:00:00")
+    assert default_queue_and_walltime(2) == ("capacity", "01:00:00")  # legacy default
+    for nodes in (1, 64, 9408):
+        assert default_queue_and_walltime(nodes, site_id=FRONTIER_SITE_ID) == (
+            "batch",
+            "01:00:00",
+        )
+    with pytest.raises(ValueError, match="no default queue/walltime for site"):
+        default_queue_and_walltime(2, site_id="nersc-perlmutter")
+    with pytest.raises(ValueError, match="positive integer"):
+        default_queue_and_walltime(0, site_id=FRONTIER_SITE_ID)
+
+
+def test_every_known_site_has_queue_defaults():
+    from exaserve.schedulers.base import _QUEUE_DEFAULTS
+
+    assert {AURORA_SITE_ID, FRONTIER_SITE_ID} <= set(_QUEUE_DEFAULTS)

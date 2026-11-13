@@ -633,7 +633,7 @@ def run(plan_path: str) -> int:
         # worker address separately in either consumer can select a different
         # interface on multi-fabric HPC nodes and make vLLM observe more IPs
         # than Ray node IDs.
-        node_ip = ray_node_ip(cluster, rank)
+        node_ip = ray_node_ip(cluster, rank, site_id=plan.site_profile_id)
         ray_env = _without_control_credentials(
             ray_child_environment(plan, node_ip=node_ip, site_profile=profile)
         )

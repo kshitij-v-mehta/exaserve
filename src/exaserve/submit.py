@@ -378,7 +378,9 @@ def submit_serve(
     raw = load_yaml_mapping_text(config_bytes, source=cfg_path)
     site_profile = default_site_profile()
     topology_plan = compile_deployment_plan(raw, site=site_profile, deployment_id="pending")
-    topology_queue, topology_walltime = default_queue_and_walltime(topology_plan.num_nodes)
+    topology_queue, topology_walltime = default_queue_and_walltime(
+        topology_plan.num_nodes, site_id=site_profile.site_id
+    )
     resolved_queue = queue or defaults.queue or topology_queue
     resolved_walltime = walltime or defaults.walltime or topology_walltime
     resolved_account = project_account or defaults.project_account

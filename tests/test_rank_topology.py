@@ -529,6 +529,7 @@ def test_ray_and_vllm_share_one_resolved_node_ip(monkeypatch):
     plan = SimpleNamespace(
         deployment_plan_hash="a" * 64,
         site_profile_hash="b" * 64,
+        site_profile_id="alcf-aurora",
         vendor="xpu",
         engine="vllm",
     )
@@ -541,11 +542,11 @@ def test_ray_and_vllm_share_one_resolved_node_ip(monkeypatch):
     }.items():
         monkeypatch.setenv(key, value)
     monkeypatch.setenv("EXASERVE_RAY_INTERNAL_STARTUP_LIMIT", "8")
-    monkeypatch.setattr(ray_runtime, "_local_hsn_ip", lambda: "10.0.0.2")
+    monkeypatch.setattr(ray_runtime, "_local_hsn_ip", lambda site_id: "10.0.0.2")
 
     cluster = ray_runtime.RayClusterConfig(head_ip="10.0.0.1", port=6379, node_cpus=64)
     for rank, expected_ip in ((0, "10.0.0.1"), (1, "10.0.0.2")):
-        node_ip = ray_runtime.ray_node_ip(cluster, rank)
+        node_ip = ray_runtime.ray_node_ip(cluster, rank, site_id=plan.site_profile_id)
         environment = ray_runtime.ray_child_environment(plan, node_ip=node_ip)
         argv = (
             ray_runtime.ray_head_argv(cluster, 12)
