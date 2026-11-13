@@ -54,6 +54,10 @@ export PIP_CACHE_DIR="${WORK}/pip-cache"
 export CONDA_PKGS_DIRS="${WORK}/conda-pkgs"
 export PYTHONNOUSERSITE=1
 unset PYTHONPATH PYTHONHOME VIRTUAL_ENV
+# The batch shell carries a ROCr mask; Ray 2.53 refuses to import with
+# ROCR_VISIBLE_DEVICES set (observed in build job 5919113).
+echo "[stack] inherited masks: ROCR=${ROCR_VISIBLE_DEVICES:-unset} HIP=${HIP_VISIBLE_DEVICES:-unset}"
+unset ROCR_VISIBLE_DEVICES HIP_VISIBLE_DEVICES CUDA_VISIBLE_DEVICES
 mkdir -p "${TMPDIR}"
 
 # --- Interpreter ---------------------------------------------------------------
@@ -97,6 +101,26 @@ cd "${SRC}"
 "${PIP[@]}" install -c "${CONSTRAINTS}" -r requirements/build.txt 2>&1 | tee "${LOG_DIR}/vllm-build-reqs.log"
 "${PIP[@]}" install -c "${CONSTRAINTS}" -r requirements/rocm.txt "ray[serve,cgraph]==${RAY_VERSION}" \
     2>&1 | tee "${LOG_DIR}/vllm-reqs.log"
+# xgrammar declares an unpinned "triton" dependency, so pip installs the upstream
+# triton wheel over torch's ROCm build (distribution triton-rocm) in the same
+# triton/ package directory.  Restore the exact ROCm Triton torch was built with;
+# pip check will then report xgrammar's "triton" requirement as unmet, which is
+# expected for ROCm stacks.
+ROCM_TRITON="$("${PY}" -c "from importlib.metadata import requires
+print(next(r.split(';')[0].replace(' ', '') for r in requires('torch') if r.startswith('triton-rocm')))")"
+"${PIP[@]}" uninstall -y triton 2>&1 | tee "${LOG_DIR}/triton-repair.log"
+"${PIP[@]}" install --force-reinstall --no-deps --index-url "${TORCH_ROCM_INDEX}" "${ROCM_TRITON}" \
+    2>&1 | tee -a "${LOG_DIR}/triton-repair.log"
+"${PY}" - <<'PY'
+from importlib.metadata import PackageNotFoundError, version
+import triton
+try:
+    version("triton")
+    raise SystemExit("upstream triton distribution is still installed")
+except PackageNotFoundError:
+    pass
+print("triton", triton.__version__, "from triton-rocm", version("triton-rocm"))
+PY
 if ! "${PY}" -c "import amdsmi" >/dev/null 2>&1; then
     cp -a "${ROCM_PATH}/share/amd_smi" "${WORK}/amd_smi"
     "${PIP[@]}" install "${WORK}/amd_smi" 2>&1 | tee "${LOG_DIR}/amdsmi.log"
