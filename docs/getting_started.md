@@ -288,3 +288,28 @@ stdout/stderr and canonical status; diagnose early errors and safely stop
 clearly broken work. Report the exact command, session and evidence paths;
 distinguish scheduler walltime expiry from application failure. Cleanup belongs
 to the canonical executor, not a second shell lifecycle.
+
+## Frontier development and serving
+
+Frontier support is validation-only. Building the serving runtime, staging
+models and submitting deployments are covered in
+[Frontier validation deployment](deploy_frontier.md).
+
+Run the portable suite on a compute node, not a login node, and work from
+node-local storage: on Orion, test collection alone takes longer than 30
+minutes. Clone the checkout and put the uv environment under `/tmp`. Inside a
+`-C nvme` allocation, load the toolchain the tests need: the default `g++`
+lacks C++20, and one test needs Go.
+
+```bash
+module load PrgEnv-gnu cray-python/3.12.12 go/1.26.1
+export GOCACHE=/tmp/gocache GOMODCACHE=/tmp/gomod GOPATH=/tmp/gopath
+export UV_PROJECT_ENVIRONMENT=/tmp/es-devvenv UV_PYTHON="$(command -v python3)"
+export UV_CACHE_DIR=/mnt/bb/$USER/uv-cache
+unset ROCR_VISIBLE_DEVICES HIP_VISIBLE_DEVICES PYTHONPATH
+git clone --branch <branch> /path/to/checkout /tmp/es-src && cd /tmp/es-src
+make UV=/path/to/uv install-dev test lint format-check type-check
+```
+
+Use the pinned `uv==0.13.4`. Downloads go through the OLCF proxy
+(`http_proxy`/`https_proxy=http://proxy.ccs.ornl.gov:3128/`).
